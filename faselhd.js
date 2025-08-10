@@ -1,17 +1,13 @@
-function decodeHtmlEntities(text) {
-    return text
-        .replace(/&#8217;/g, "'")
-        .replace(/&#8220;/g, '"')
-        .replace(/&#8221;/g, '"')
-        .replace(/&#8230;/g, '...')
-        .replace(/&amp;/g, '&')
-        .replace(/&quot;/g, '"')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(num));
-}
-
 async function searchResults(keyword) {
+    // السماح بالإنجليزي والأرقام فقط
+    if (!/^[a-zA-Z0-9\s]+$/.test(keyword)) {
+        return JSON.stringify([{
+            title: "Only English letters and numbers are allowed",
+            image: "",
+            href: ""
+        }]);
+    }
+
     const results = [];
     try {
         const response = await fetchv2("https://www.faselhds.xyz/?s=" + encodeURIComponent(keyword));
@@ -22,7 +18,7 @@ async function searchResults(keyword) {
         let match;
         while ((match = regex.exec(html)) !== null) {
             results.push({
-                title: match[3].trim(),
+                title: decodeHtmlEntities(match[3].trim()),
                 image: match[2].trim(),
                 href: match[1].trim()
             });
@@ -38,6 +34,18 @@ async function searchResults(keyword) {
     }
 }
 
+function decodeHtmlEntities(text) {
+    return text
+        .replace(/&#8217;/g, "'")
+        .replace(/&#8220;/g, '"')
+        .replace(/&#8221;/g, '"')
+        .replace(/&#8230;/g, '...')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(num));
+}
 
 async function extractDetails(url) {
     try {
