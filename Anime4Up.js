@@ -1,10 +1,10 @@
 async function searchResults(keyword) {
   try {
-    const url = `https://4s.qerxam.shop/?search_param=animes&s=${encodeURIComponent(keyword)}`;
+    const url = `https://4p.jguris.shop/?search_param=animes&s=${encodeURIComponent(keyword)}`;
     const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://4s.qerxam.shop/'
+        'Referer': 'https://4p.jguris.shop/'
       }
     });
     const html = await res.text();
@@ -223,7 +223,7 @@ function _0x7E9A(_) {
     (____ = typeof ___,
       _____ = ___ && ___[String.fromCharCode(...[108, 101, 110, 103, 116, 104])],
       ______ = [...String.fromCharCode(...[99, 114, 97, 110, 99, 105])],
-      _______ = ___ ? [...___[String.fromCharCode(...[116, 111, 76, 111, 119, 101, 114, 67, 97, 115, 101])]()] : [],
+      _______ = ___ ? [...___[String.fromCharCode(...[116, 111, 119, 101, 114, 67, 97, 115, 101])]()] : [],
       (________ = ______[String.fromCharCode(...[115, 108, 105, 99, 101])]() ) && _______[
         String.fromCharCode(...[102, 111, 114, 69, 97, 99, 104])
       ]((_________, __________) =>
