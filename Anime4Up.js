@@ -229,22 +229,36 @@ async function extractStreamUrl(url) {
     return null;
   }
 
-  async function extractDoodstream(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
+  async function doodstreamExtractor(html, url = null) {
+    console.log("DoodStream extractor called");
+    console.log("DoodStream extractor URL: " + url);
+        const streamDomain = url.match(/https:\/\/(.*?)\//, url)[0].slice(8, -1);
+        const md5Path = html.match(/'\/pass_md5\/(.*?)',/, url)[0].slice(11, -2);
 
-    // Try direct source
-    let m = html.match(/file\s*:\s*['"]([^'"]+)['"]/i);
-    if (!m) m = html.match(/"file"\s*:\s*"([^"]+)"/i);
-    if (m && m[1]) return normalizeUrl(m[1], embedUrl);
+        const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
+        const expiryTimestamp = new Date().valueOf();
+        const random = randomStr(10);
 
-    // Try unpack eval if present (you can add unpackEval func if needed)
-    // Skipped here for brevity
+        const passResponse = await fetch(`https://${streamDomain}/pass_md5/${md5Path}`, {
+            headers: {
+                "Referer": url,
+            },
+        });
+        console.log("DoodStream extractor response: " + passResponse.status);
+        const responseData = await passResponse.text();
+        const videoUrl = `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
+        console.log("DoodStream extractor video URL: " + videoUrl);
+        return videoUrl;
+}
 
-    return null;
-  }
+function randomStr(length) {
+    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let result = "";
+    for (let i = 0; i < length; i++) {
+        result += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    return result;
+}
 
   async function extractVoe(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
