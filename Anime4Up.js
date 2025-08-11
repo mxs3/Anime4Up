@@ -191,35 +191,16 @@ async function extractStreamUrl(url) {
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const page = await res.text();
-
-    // Try to extract direct video file from page
-    let m = page.match(/sources\s*:\s*\[\s*{file:\s*['"]([^'"]+)['"]/i) ||
-            page.match(/file\s*:\s*['"]([^'"]+)['"]/i) ||
-            page.match(/"file"\s*:\s*"([^"]+)"/i);
-
+    let m = page.match(/player\.src\(\{\s*(?:file|src)\s*:\s*['"]([^'"]+)['"]/i) || page.match(/file:\s*'([^']+)'/i) || page.match(/"file"\s*:\s*"([^"]+)"/i);
+    if (m && m[1]) return normalizeUrl(m[1], embedUrl);
+    m = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
     if (m && m[1]) {
-      return {
-        title: "mp4upload",
-        stream: normalizeUrl(m[1], embedUrl) + "||mp4",
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-      };
-    }
-
-    // Fallback to API get_video
-    const idMatch = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
-    if (idMatch && idMatch[1]) {
-      const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${idMatch[1]}`, { headers: { Referer: embedUrl } });
+      const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${m[1]}`, { headers: { Referer: embedUrl } });
       if (trial) {
         const txt = await trial.text();
         try {
           const j = JSON.parse(txt);
-          if (j && j.file) {
-            return {
-              title: "mp4upload",
-              stream: normalizeUrl(j.file, embedUrl) + "||mp4",
-              headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-            };
-          }
+          if (j && j.file) return normalizeUrl(j.file, embedUrl);
         } catch {}
       }
     }
@@ -233,54 +214,7 @@ async function extractStreamUrl(url) {
     if (!res) return null;
     const html = await res.text();
     const match = html.match(/sources:\s*\[\s*"([^"]+\.mp4)"\s*\]/);
-    if (match && match[1]) {
-      return {
-        title: "uqload",
-        stream: normalizeUrl(match[1], embedUrl) + "||mp4",
-        headers
-      };
-    }
-    return null;
-  }
-
-  async function extractVadmad(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-    // فرضًا استخراج رابط m3u8 أو mp4 من الصفحة
-    let m = html.match(/source\s*:\s*"([^"]+\.m3u8)"/i) || html.match(/source\s*:\s*"([^"]+\.mp4)"/i);
-    if (m && m[1]) {
-      const ext = m[1].endsWith(".m3u8") ? "m3u8" : "mp4";
-      return {
-        title: "vadmad",
-        stream: normalizeUrl(m[1], embedUrl) + "||" + ext,
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-      };
-    }
-    return null;
-  }
-
-  async function extractDoodstream(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-
-    // ابحث في الصفحة عن رابط الفيديو الحقيقي
-    const videoMatch = html.match(/"stream_url"\s*:\s*"([^"]+\.m3u8)"/i) ||
-                       html.match(/"file"\s*:\s*"([^"]+\.mp4)"/i) ||
-                       html.match(/sources:\s*\[\s*{file:\s*['"]([^'"]+)['"]/i);
-
-    if (videoMatch && videoMatch[1]) {
-      const ext = videoMatch[1].endsWith(".m3u8") ? "m3u8" : "mp4";
-      return {
-        title: "doodstream",
-        stream: normalizeUrl(videoMatch[1], embedUrl) + "||" + ext,
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-      };
-    }
-
+    if (match && match[1]) return normalizeUrl(match[1], embedUrl);
     return null;
   }
 
@@ -291,13 +225,24 @@ async function extractStreamUrl(url) {
     if (!res) return null;
     const html = await res.text();
     const match = html.match(/file:\s*['"]([^'"]+\.mp4)['"]/);
-    if (match && match[1]) {
-      return {
-        title: "yourupload",
-        stream: normalizeUrl(match[1], embedUrl) + "||mp4",
-        headers
-      };
-    }
+    if (match && match[1]) return normalizeUrl(match[1], embedUrl);
+    return null;
+  }
+
+  async function extractDoodstream(embedUrl) {
+    embedUrl = normalizeUrl(embedUrl);
+    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+    if (!res) return null;
+    const html = await res.text();
+
+    // Try direct source
+    let m = html.match(/file\s*:\s*['"]([^'"]+)['"]/i);
+    if (!m) m = html.match(/"file"\s*:\s*"([^"]+)"/i);
+    if (m && m[1]) return normalizeUrl(m[1], embedUrl);
+
+    // Try unpack eval if present (you can add unpackEval func if needed)
+    // Skipped here for brevity
+
     return null;
   }
 
@@ -324,26 +269,16 @@ async function extractStreamUrl(url) {
     }
     if (!json || !json.data) return null;
     if (Array.isArray(json.data)) {
+      // prefer HLS if available
       const hls = json.data.find((s) => s.file && /\.m3u8/i.test(s.file));
-      if (hls) {
-        return {
-          title: "voe.sx",
-          stream: normalizeUrl(hls.file, embedUrl) + "||m3u8",
-          headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-        };
-      }
-      if (json.data[0] && json.data[0].file) {
-        return {
-          title: "voe.sx",
-          stream: normalizeUrl(json.data[0].file, embedUrl) + "||mp4",
-          headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-        };
-      }
+      if (hls) return normalizeUrl(hls.file, embedUrl);
+      if (json.data[0] && json.data[0].file) return normalizeUrl(json.data[0].file, embedUrl);
     }
     return null;
   }
 
   async function extractFilemoon(html, baseUrl) {
+    // Simple logic: extract iframe src then extract master.m3u8 from eval packed script
     const iframeMatch = html.match(/<iframe[^>]+src="([^"]+)"[^>]*><\/iframe>/i);
     if (!iframeMatch) return null;
     const iframeUrl = normalizeUrl(iframeMatch[1], baseUrl);
@@ -351,14 +286,15 @@ async function extractStreamUrl(url) {
     if (!res) return null;
     const iframeHtml = await res.text();
 
-    // ابحث عن سكربت eval المعبأ - تحتاج دالة لفك التشفير
+    // Find eval packed script with master.m3u8 url
     const evalMatch = iframeHtml.match(/eval\(function\(p,a,c,k,e,d\)[\s\S]+?\)\)/);
     if (!evalMatch) return null;
 
-    // فك التشفير (دالة unpackEval أساسية)
+    // unpackEval function required - quick basic version:
     function unpackEval(packed) {
       try {
-        // تحتاج مكتبة خارجية لفك التشفير JS أو تستخدم eval آمن (لكن الحذر)
+        // Using external unpacker libs or your own implementation needed here.
+        // For demo, just return null
         return null;
       } catch {
         return null;
@@ -368,32 +304,25 @@ async function extractStreamUrl(url) {
     if (!unpacked) return null;
 
     const m3u8Match = unpacked.match(/https?:\/\/[^"']+master\.m3u8[^"']*/i);
-    if (m3u8Match) {
-      return {
-        title: "filemoon",
-        stream: normalizeUrl(m3u8Match[0], iframeUrl) + "||m3u8",
-        headers: { Referer: iframeUrl, "User-Agent": "Mozilla/5.0" }
-      };
-    }
+    if (m3u8Match) return normalizeUrl(m3u8Match[0], iframeUrl);
     return null;
   }
 
-  // ==== Main Logic ====
-
+  // ==== Main ====
   try {
     const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
     if (!pageRes) return JSON.stringify({ streams: [] });
     const pageHtml = await pageRes.text();
 
-    // ابحث عن روابط في <a data-ep-url=""> و <iframe src="">
+    // Extract links from <a data-ep-url="..." ...> and iframe src
     const anchorRe = /<a\b[^>]*\bdata-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
     const iframeRe = /<iframe[^>]+src=(?:(['"])(.*?)\1|([^\s>]+))/gi;
 
-    const blockedKeywords = ["mega", "megamax"];
+    const blockedKeywords = ["mega", "megamax", "dailymotion"];
     const providers = [];
     const seen = new Set();
 
-    // جمع روابط anchors
+    // Extract anchors
     let match;
     while ((match = anchorRe.exec(pageHtml)) !== null) {
       const rawUrl = normalizeUrl(match[2] || match[3] || "", url);
@@ -408,7 +337,7 @@ async function extractStreamUrl(url) {
       providers.push({ rawUrl, title });
     }
 
-    // لو مفيش anchors، خد iframe الأول
+    // Extract iframe if no anchors
     if (providers.length === 0) {
       let ifrMatch;
       while ((ifrMatch = iframeRe.exec(pageHtml)) !== null) {
@@ -425,30 +354,48 @@ async function extractStreamUrl(url) {
     const streams = [];
     for (const prov of providers) {
       const u = prov.rawUrl.toLowerCase();
+
+      // Extra safety filter
       if (blockedKeywords.some((kw) => u.includes(kw))) continue;
 
-      let extracted = null;
-
+      let direct = null;
       if (/mp4upload\.com/i.test(u)) {
-        extracted = await extractMp4upload(prov.rawUrl);
+        direct = await extractMp4upload(prov.rawUrl);
       } else if (/uqload/i.test(u)) {
-        extracted = await extractUqload(prov.rawUrl);
-      } else if (/vadmad/i.test(u)) {
-        extracted = await extractVadmad(prov.rawUrl);
-      } else if (/doodstream|d-s\.io|dood/i.test(u)) {
-        extracted = await extractDoodstream(prov.rawUrl);
+        direct = await extractUqload(prov.rawUrl);
       } else if (/yourupload/i.test(u)) {
-        extracted = await extractYourupload(prov.rawUrl);
+        direct = await extractYourupload(prov.rawUrl);
+      } else if (/doodstream|d-s\.io|dood/i.test(u)) {
+        direct = await extractDoodstream(prov.rawUrl);
       } else if (/voe\.sx|voe\//i.test(u)) {
-        extracted = await extractVoe(prov.rawUrl);
+        direct = await extractVoe(prov.rawUrl);
       } else if (/filemoon/i.test(u)) {
-        extracted = await extractFilemoon(pageHtml, url);
+        direct = await extractFilemoon(pageHtml, url);
       }
 
-      if (extracted) {
-        streams.push(extracted);
+      if (!direct) {
+        try {
+          const r = await httpGet(prov.rawUrl, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+          if (r) {
+            const txt = await r.text();
+            const found = txt.match(/https?:\/\/[^"'<>\s]+\.m3u8[^"'<>\s]*/i) || txt.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
+            if (found && found[0]) direct = normalizeUrl(found[0], prov.rawUrl);
+          }
+        } catch {}
+      }
+
+      if (direct) {
+        streams.push({
+          title: prov.title,
+          streamUrl: direct,
+          headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" },
+        });
       } else {
-        // لو ما لقيتش رابط فيديو حقيقي، ما ترجعش embed مباشر (تجاهل)
+        streams.push({
+          title: prov.title + " (embed)",
+          streamUrl: prov.rawUrl,
+          headers: { Referer: url, "User-Agent": "Mozilla/5.0" },
+        });
       }
     }
 
