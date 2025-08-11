@@ -302,55 +302,77 @@ async function extractStreamUrl(url) {
   }
 
   // 3) vidmoly (uses the extractor you provided)
-  async function extractVidmoly(embedUrl) {
+  async function vidmolyExtractor(html, baseUrl = '') {
+  // Regex لاستخراج الخيارات الشائعة
+  const regexSub = /<option value="([^"]+)"[^>]*>\s*SUB - Omega\s*<\/option>/i;
+  const regexFallback = /<option value="([^"]+)"[^>]*>\s*Omega\s*<\/option>/i;
+  const fallback = /<option value="([^"]+)"[^>]*>\s*SUB v2 - Omega\s*<\/option>/i;
+
+  const match = html.match(regexSub) || html.match(regexFallback) || html.match(fallback);
+  if (match && match[1]) {
+    // فك ترميز base64 من قيمة الخيار
+    const base64String = match[1];
+    let decodedHtml;
     try {
-      embedUrl = normalizeUrl(embedUrl);
-      const res = await httpGet(embedUrl, { headers: serverHeaders("vidmoly") });
-      if (!res) return null;
-      const page = await res.text();
-
-      // check for base64 option pattern like in your snippet
-      const regexSub = /<option value="([^"]+)"[^>]*>\s*SUB - Omega\s*<\/option>/i;
-      const regexFallback = /<option value="([^"]+)"[^>]*>\s*Omega\s*<\/option>/i;
-      const regexSubV2 = /<option value="([^"]+)"[^>]*>\s*SUB v2 - Omega\s*<\/option>/i;
-      const match = page.match(regexSub) || page.match(regexFallback) || page.match(regexSubV2);
-
-      if (match && match[1]) {
-        // decode base64 -> get iframe -> fetch iframe page -> find m3u8
-        try {
-          const decoded = atob(match[1]);
-          const iframeMatch = decoded.match(/<iframe\s+src="([^"]+)"/i);
-          if (!iframeMatch) return null;
-          let iframeUrl = iframeMatch[1];
-          if (iframeUrl.startsWith("//")) iframeUrl = "https:" + iframeUrl;
-          iframeUrl = normalizeUrl(iframeUrl, embedUrl);
-
-          const res2 = await httpGet(iframeUrl, { headers: serverHeaders("vidmoly") });
-          if (!res2) return null;
-          const iframeHtml = await res2.text();
-
-          const m3u8Match = iframeHtml.match(/sources:\s*\[\{file:\s*["']([^"']+\.m3u8)["']/i)
-                         || iframeHtml.match(/"file"\s*:\s*"([^"]+\.m3u8)"/i);
-          if (m3u8Match && m3u8Match[1]) return normalizeUrl(m3u8Match[1], iframeUrl);
-
-          // fallback: search iframe HTML for m3u8 or mp4
-          const found = findSourceInHtml(iframeHtml);
-          if (found) return normalizeUrl(found, iframeUrl);
-          return null;
-        } catch (e) {
-          return null;
-        }
+      if (typeof atob === 'function') {
+        decodedHtml = atob(base64String);
       } else {
-        // fallback: look for sources in the main page
-        const sourcesRegex = /sources:\s*\[\{file:\s*["'](https?:\/\/[^"']+)["']/i;
-        const sm = page.match(sourcesRegex);
-        if (sm && sm[1]) return normalizeUrl(sm[1], embedUrl);
-        // last resort: try to find any m3u8/mp4
-        const found = findSourceInHtml(page);
-        return found ? normalizeUrl(found, embedUrl) : null;
+        // بيئة Node.js
+        decodedHtml = Buffer.from(base64String, 'base64').toString('utf-8');
       }
-    } catch { return null; }
+    } catch {
+      console.log("Failed to decode base64 in vidmoly extractor");
+      return null;
+    }
+
+    // استخراج رابط iframe من الكود المفكوك
+    const iframeMatch = decodedHtml.match(/<iframe\s+src="([^"]+)"/i);
+    if (!iframeMatch || !iframeMatch[1]) {
+      console.log("No iframe found in decoded vidmoly HTML");
+      return null;
+    }
+
+    // بناء رابط الـ iframe بشكل صحيح
+    let iframeUrl = iframeMatch[1];
+    if (iframeUrl.startsWith('//')) iframeUrl = 'https:' + iframeUrl;
+    else if (iframeUrl.startsWith('/')) iframeUrl = (baseUrl ? baseUrl.replace(/\/$/, '') : '') + iframeUrl;
+    else if (!/^https?:\/\//i.test(iframeUrl)) iframeUrl = 'https://' + iframeUrl;
+
+    // جلب صفحة iframe
+    const hasFetchV2 = typeof fetchv2 === 'function';
+    let iframeResponse;
+    try {
+      if (hasFetchV2) {
+        iframeResponse = await fetchv2(iframeUrl);
+      } else {
+        iframeResponse = await fetch(iframeUrl);
+      }
+    } catch {
+      console.log("Failed to fetch iframe URL in vidmoly extractor");
+      return null;
+    }
+
+    if (!iframeResponse) return null;
+    const iframeHtml = await iframeResponse.text();
+
+    // محاولة استخراج رابط ملف m3u8 من iframe
+    const m3u8Match = iframeHtml.match(/sources:\s*\[\{file:\s*"([^"]+\.m3u8)"/i);
+    if (m3u8Match && m3u8Match[1]) return m3u8Match[1];
+
+    // فاولباك: محاولة العثور على رابط فيديو مباشر (m3u8 أو mp4)
+    const fallbackMatch = iframeHtml.match(/https?:\/\/[^"'<>]+\.m3u8[^"'<>]*/i) || iframeHtml.match(/https?:\/\/[^"'<>]+\.mp4[^"'<>]*/i);
+    if (fallbackMatch) return fallbackMatch[0];
+
+    return null;
+  } else {
+    // إذا ما لقيناش أي خيار base64، حاول ناخد المصادر مباشرة من الصفحة الرئيسية
+    const sourcesRegex = /sources:\s*\[\{file:\s*"([^"]+)"\}/i;
+    const sourcesMatch = html.match(sourcesRegex);
+    if (sourcesMatch && sourcesMatch[1]) return sourcesMatch[1];
+
+    return null;
   }
+}
 
   // 4) uqload
   async function extractUqload(embedUrl) {
