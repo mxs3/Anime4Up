@@ -281,25 +281,90 @@ async function extractStreamUrl(url) {
   }
 
   // 2) voe.sx
-  async function extractVoe(embedUrl) {
-    try {
-      embedUrl = normalizeUrl(embedUrl);
-      const idMatch = embedUrl.match(/\/e\/([^/?#]+)/i);
-      if (!idMatch) return null;
-      const id = idMatch[1];
-      const api = `https://voe.sx/api/source/${id}`;
-      const res = await httpGet(api, { method: 'POST', headers: serverHeaders("voe"), body: '' });
-      if (!res) return null;
-      const json = await res.json().catch(()=>null);
-      if (!json || !json.data) return null;
-      if (Array.isArray(json.data)) {
-        const hls = json.data.find(s => s.file && /\.m3u8/i.test(s.file));
-        if (hls) return normalizeUrl(hls.file, embedUrl);
-        if (json.data[0] && json.data[0].file) return normalizeUrl(json.data[0].file, embedUrl);
-      }
-      return null;
-    } catch { return null; }
+  function voeExtractor(html) {
+  // استخراج أول <script type="application/json">...</script>
+  const jsonScriptMatch = html.match(
+    /<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i
+  );
+  if (!jsonScriptMatch) {
+    console.log("No application/json script tag found");
+    return null;
   }
+
+  const obfuscatedJson = jsonScriptMatch[1].trim();
+
+  let data;
+  try {
+    data = JSON.parse(obfuscatedJson);
+  } catch (e) {
+    throw new Error("Invalid JSON input.");
+  }
+  if (!Array.isArray(data) || typeof data[0] !== "string") {
+    throw new Error("Input doesn't match expected format.");
+  }
+  let obfuscatedString = data[0];
+
+  // Step 1: ROT13
+  let step1 = voeRot13(obfuscatedString);
+
+  // Step 2: Remove patterns
+  let step2 = voeRemovePatterns(step1);
+
+  // Step 3: Base64 decode
+  let step3 = voeBase64Decode(step2);
+
+  // Step 4: Subtract 3 from each char code
+  let step4 = voeShiftChars(step3, 3);
+
+  // Step 5: Reverse string
+  let step5 = step4.split("").reverse().join("");
+
+  // Step 6: Base64 decode again
+  let step6 = voeBase64Decode(step5);
+
+  // Step 7: Parse as JSON
+  let result;
+  try {
+    result = JSON.parse(step6);
+  } catch (e) {
+    throw new Error("Final JSON parse error: " + e.message);
+  }
+
+  return result;
+}
+
+function voeRot13(str) {
+  return str.replace(/[a-zA-Z]/g, function (c) {
+    return String.fromCharCode(
+      (c <= "Z" ? 90 : 122) >= (c = c.charCodeAt(0) + 13)
+        ? c
+        : c - 26
+    );
+  });
+}
+
+function voeRemovePatterns(str) {
+  const patterns = ["@$", "^^", "~@", "%?", "*~", "!!", "#&"];
+  let result = str;
+  for (const pat of patterns) {
+    result = result.split(pat).join("");
+  }
+  return result;
+}
+
+function voeBase64Decode(str) {
+  if (typeof atob === "function") {
+    return atob(str);
+  }
+  return Buffer.from(str, "base64").toString("utf-8");
+}
+
+function voeShiftChars(str, shift) {
+  return str
+    .split("")
+    .map((c) => String.fromCharCode(c.charCodeAt(0) - shift))
+    .join("");
+}
 
   // 3) vidmoly (uses the extractor you provided)
   async function vidmolyExtractor(html, baseUrl = '') {
