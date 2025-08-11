@@ -150,13 +150,11 @@ async function extractEpisodes(url) {
 // Sora-ready extractStreamUrl
 // -------------------------------
 async function extractStreamUrl(url) {
-  // ====== Utilities ======
-  const hasFetchV2 = typeof fetchv2 === 'function';
+  // ==== Utilities ====
   async function httpGet(u, opts = {}) {
     try {
-      if (hasFetchV2) {
-        const res = await fetchv2(u, opts.headers || {}, opts.method || 'GET', opts.body || null);
-        return res;
+      if (typeof fetchv2 === 'function') {
+        return await fetchv2(u, opts.headers || {}, opts.method || 'GET', opts.body || null);
       } else {
         return await fetch(u, { method: opts.method || 'GET', headers: opts.headers || {}, body: opts.body || null });
       }
@@ -169,32 +167,9 @@ async function extractStreamUrl(url) {
     }
   }
 
-  function safeTrim(s) { return s ? String(s).trim() : ''; }
-
-  function decodeHTMLEntities(text) {
-    if (!text) return text;
-    const entities = { '&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&#039;':"'",'&#39;':"'",'&nbsp;':' ' };
-    return text.replace(/&[a-zA-Z0-9#]+;/g, m => entities[m] || m);
-  }
-
-  function tryJsonParse(text) {
-    try { return JSON.parse(text); } catch { return null; }
-  }
-
-  function unpackEval(packed) {
-    try {
-      if (!/eval\(function\(p,a,c,k,e,d\)/.test(packed)) return null;
-      const payloadMatch = packed.match(/eval\(function\(p,a,c,k,e,d\)\{([\s\S]*?)\}\(([\s\S]*?)\)\)/);
-      if (!payloadMatch) return null;
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
   function normalizeUrl(raw, base = '') {
     if (!raw) return raw;
-    raw = safeTrim(raw);
+    raw = String(raw).trim();
     if (raw.startsWith('//')) return 'https:' + raw;
     if (raw.startsWith('/')) {
       if (!base) return 'https://' + raw.replace(/^\/+/, '');
@@ -204,283 +179,268 @@ async function extractStreamUrl(url) {
     return raw;
   }
 
-  function findSourceInHtml(html) {
-    if (!html) return null;
-    const reList = [
-      /file\s*:\s*['"]([^'"]+)['"]/ig,
-      /src\s*:\s*['"]([^'"]+)['"]/ig,
-      /"file"\s*:\s*"([^"]+)"/ig,
-      /"src"\s*:\s*"([^"]+)"/ig,
-      /source\s+src=['"]([^'"]+)['"]/ig,
-      /sources\s*:\s*(\[[\s\S]*?\])/ig
-    ];
-    for (const r of reList) {
-      let m;
-      while ((m = r.exec(html)) !== null) {
-        if (m[1]) return m[1];
+  // ====== Extractors ======
+
+  async function filemoonExtractor(html, refUrl = null) {
+    // extract iframe URL
+    const regex = /<iframe[^>]+src="([^"]+)"[^>]*><\/iframe>/;
+    const match = html.match(regex);
+    if (!match) return null;
+    const iframeUrl = normalizeUrl(match[1], refUrl);
+
+    const iframeResponse = await httpGet(iframeUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": refUrl || '',
+        "Accept": "text/html"
       }
-    }
-    const m3u8 = html.match(/https?:\/\/[^"'<>]+\.m3u8[^"'<>]*/i);
-    if (m3u8) return m3u8[0];
-    const mp4 = html.match(/https?:\/\/[^"'<>]+\.mp4[^"'<>]*/i);
-    if (mp4) return mp4[0];
+    });
+    if (!iframeResponse) return null;
+    const iframeHtml = await iframeResponse.text();
+
+    // Extract eval-packed script with m3u8
+    const evalScriptMatch = iframeHtml.match(/eval\(function\(p,a,c,k,e,d\)[\s\S]+?\)\)/);
+    if (!evalScriptMatch) return null;
+
+    const unpackedScript = unpack(evalScriptMatch[0]);
+    const m3u8Match = unpackedScript.match(/https?:\/\/[^\s"']+master\.m3u8[^\s"']*/);
+    if (m3u8Match) return m3u8Match[0];
     return null;
   }
 
-  // ====== Server-specific extractors ======
-  async function extractMp4upload(embedUrl) {
-    try {
-      embedUrl = normalizeUrl(embedUrl);
-      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, 'User-Agent': 'Mozilla/5.0' } });
-      if (!res) return null;
-      const page = await res.text();
-      let m = page.match(/player\.src\(\{\s*(?:file|src)\s*:\s*['"]([^'"]+)['"]/i) || page.match(/file:\s*'([^']+)'/i) || page.match(/"file"\s*:\s*"([^"]+)"/i);
-      if (m && m[1]) return normalizeUrl(m[1], embedUrl);
-      m = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
-      if (m && m[1]) {
-        const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${m[1]}`, { headers: { Referer: embedUrl } });
-        if (trial) {
-          const txt = await trial.text();
-          const j = tryJsonParse(txt);
-          if (j && j.file) return normalizeUrl(j.file, embedUrl);
+  // Unpacker function for packed js (p.a.c.k.e.r)
+  function unpack(source) {
+    // Minimal unpacker from your previous code
+    let { payload, symtab, radix, count } = _filterargs(source);
+    if (count != symtab.length) throw Error("Malformed p.a.c.k.e.r. symtab.");
+    let unbase = new Unbaser(radix);
+    function lookup(match) {
+      const word = match;
+      return radix == 1 ? symtab[parseInt(word)] : symtab[unbase.unbase(word)] || word;
+    }
+    source = payload.replace(/\b\w+\b/g, lookup);
+    return source;
+  
+    function _filterargs(source) {
+      const juicers = [
+        /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\), *(\d+), *(.*)\)\)/,
+        /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/
+      ];
+      for (const juicer of juicers) {
+        const args = juicer.exec(source);
+        if (args) {
+          try {
+            return {
+              payload: args[1],
+              symtab: args[4].split("|"),
+              radix: parseInt(args[2]),
+              count: parseInt(args[3]),
+            };
+          } catch {
+            throw Error("Corrupted p.a.c.k.e.r. data.");
+          }
         }
       }
-      return null;
-    } catch {
-      return null;
+      throw Error("Could not parse p.a.c.k.e.r. data.");
     }
   }
-
-  async function extractVoe(embedUrl) {
-    try {
-      embedUrl = normalizeUrl(embedUrl);
-      const idMatch = embedUrl.match(/\/e\/([^/?#]+)/i);
-      if (!idMatch) return null;
-      const id = idMatch[1];
-      const api = `https://voe.sx/api/source/${id}`;
-      const res = await httpGet(api, { method: 'POST', headers: { Referer: embedUrl, 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/x-www-form-urlencoded' } });
-      if (!res) return null;
-      const json = await res.json().catch(() => null);
-      if (!json || !json.data) return null;
-      if (Array.isArray(json.data)) {
-        const hls = json.data.find(s => s.file && /\.m3u8/i.test(s.file));
-        if (hls) return normalizeUrl(hls.file, embedUrl);
-        if (json.data[0] && json.data[0].file) return normalizeUrl(json.data[0].file, embedUrl);
+  class Unbaser {
+    constructor(base) {
+      this.ALPHABET = {
+        62: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      };
+      this.dictionary = {};
+      this.base = base;
+      if (2 <= base && base <= 36) {
+        this.unbase = (value) => parseInt(value, base);
+      } else {
+        [...this.ALPHABET[base]].forEach((cipher, index) => {
+          this.dictionary[cipher] = index;
+        });
+        this.unbase = this._dictunbaser;
       }
-      return null;
-    } catch {
-      return null;
+    }
+    _dictunbaser(value) {
+      let ret = 0;
+      [...value].reverse().forEach((cipher, index) => {
+        ret += Math.pow(this.base, index) * this.dictionary[cipher];
+      });
+      return ret;
     }
   }
 
-  async function extractVidmoly(embedUrl) {
+  async function uqloadExtractor(embedUrl) {
+    embedUrl = normalizeUrl(embedUrl);
+    const headers = {
+      "Referer": embedUrl,
+      "Origin": "https://uqload.net"
+    };
+    const response = await httpGet(embedUrl, { headers });
+    if (!response) return null;
+    const html = await response.text();
+    const match = html.match(/sources:\s*\[\s*"([^"]+\.mp4)"\s*\]/);
+    return match ? { url: normalizeUrl(match[1], embedUrl), headers } : null;
+  }
+
+  async function youruploadExtractor(embedUrl) {
+    embedUrl = normalizeUrl(embedUrl);
+    const headers = { "Referer": "https://www.yourupload.com/" };
+    const response = await httpGet(embedUrl, { headers });
+    if (!response) return null;
+    const html = await response.text();
+    const match = html.match(/file:\s*['"]([^'"]+\.mp4)['"]/);
+    return match ? { url: normalizeUrl(match[1], embedUrl), headers } : null;
+  }
+
+  async function voeExtractor(html) {
+    // Extract JSON script
+    const jsonScriptMatch = html.match(/<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i);
+    if (!jsonScriptMatch) return null;
+    const obfuscatedJson = jsonScriptMatch[1].trim();
+    let data;
     try {
-      embedUrl = normalizeUrl(embedUrl);
-      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, 'User-Agent': 'Mozilla/5.0' } });
-      if (!res) return null;
-      const page = await res.text();
-      let m = page.match(/file\s*:\s*['"]([^'"]+)['"]/i) || page.match(/"file"\s*:\s*"([^"]+)"/i);
-      if (m && m[1]) return normalizeUrl(m[1], embedUrl);
-      m = page.match(/sources\s*:\s*(\[[\s\S]*?\])/i);
-      if (m && m[1]) {
-        const arr = tryJsonParse(m[1].replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":'));
-        if (Array.isArray(arr) && arr[0] && arr[0].file) return normalizeUrl(arr[0].file, embedUrl);
+      data = JSON.parse(obfuscatedJson);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(data) || typeof data[0] !== "string") return null;
+    let step1 = voeRot13(data[0]);
+    let step2 = voeRemovePatterns(step1);
+    let step3 = voeBase64Decode(step2);
+    let step4 = voeShiftChars(step3, 3);
+    let step5 = step4.split("").reverse().join("");
+    let step6 = voeBase64Decode(step5);
+    try {
+      const result = JSON.parse(step6);
+      if (result.direct_access_url) return { url: result.direct_access_url, headers: {} };
+      if (result.source && Array.isArray(result.source)) {
+        const s = result.source.find(src => src.direct_access_url);
+        if (s) return { url: s.direct_access_url, headers: {} };
       }
-      return findSourceInHtml(page);
     } catch {
       return null;
     }
+    return null;
+
+    function voeRot13(str) {
+      return str.replace(/[a-zA-Z]/g, c => {
+        const base = c <= "Z" ? 65 : 97;
+        return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+      });
+    }
+    function voeRemovePatterns(str) {
+      const patterns = ["@$", "^^", "~@", "%?", "*~", "!!", "#&"];
+      let res = str;
+      for (const p of patterns) res = res.split(p).join("");
+      return res;
+    }
+    function voeBase64Decode(str) {
+      if (typeof atob === "function") return atob(str);
+      return Buffer.from(str, "base64").toString("utf-8");
+    }
+    function voeShiftChars(str, shift) {
+      return str.split("").map(c => String.fromCharCode(c.charCodeAt(0) - shift)).join("");
+    }
   }
 
-  async function extractUqload(embedUrl) {
+  async function doodstreamExtractor(html, url) {
+    if (!url) return null;
+    const streamDomain = (url.match(/https:\/\/(.*?)\//) || [])[1];
+    if (!streamDomain) return null;
+    const md5Match = html.match(/'\/pass_md5\/(.*?)'/);
+    if (!md5Match) return null;
+    const md5Path = md5Match[1];
+    const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
+    const expiryTimestamp = Date.now();
+    const random = randomStr(10);
     try {
-      embedUrl = normalizeUrl(embedUrl);
-      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, 'User-Agent': 'Mozilla/5.0' } });
-      if (!res) return null;
-      const page = await res.text();
-      let m = page.match(/"file"\s*:\s*"([^"]+)"/i) || page.match(/file:\s*'([^']+)'/i);
-      if (m && m[1]) return normalizeUrl(m[1], embedUrl);
-      return findSourceInHtml(page);
+      const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, { headers: { Referer: url } });
+      if (!passResponse) return null;
+      const responseData = await passResponse.text();
+      const videoUrl = `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
+      return { url: videoUrl, headers: { Referer: url } };
     } catch {
       return null;
     }
-  }
 
-  async function extractDoodstream(embedUrl) {
-    try {
-      embedUrl = normalizeUrl(embedUrl);
-      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, 'User-Agent': 'Mozilla/5.0' } });
-      if (!res) return null;
-      const page = await res.text();
-      let s = findSourceInHtml(page);
-      if (s) return normalizeUrl(s, embedUrl);
-      const unpacked = unpackEval(page);
-      if (unpacked) {
-        s = findSourceInHtml(unpacked);
-        if (s) return normalizeUrl(s, embedUrl);
-      }
-      return null;
-    } catch {
-      return null;
+    function randomStr(length) {
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+      let res = "";
+      for (let i = 0; i < length; i++) res += chars.charAt(Math.floor(Math.random() * chars.length));
+      return res;
     }
   }
 
-  async function extractVidea(embedUrl) {
-    try {
-      embedUrl = normalizeUrl(embedUrl);
-      const idMatch = embedUrl.match(/[?&]v=([^&]+)/i);
-      if (!idMatch) return null;
-      const vcode = idMatch[1];
-      const playerUrl = `https://videa.hu/player?video_id=${vcode}`;
-      const res = await httpGet(playerUrl, { headers: { Referer: embedUrl, 'User-Agent': 'Mozilla/5.0' } });
-      if (!res) return null;
-      const page = await res.text();
-      let s = findSourceInHtml(page);
-      if (s) return normalizeUrl(s, embedUrl);
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  async function extractMegamax(embedUrl) {
-    try {
-      embedUrl = normalizeUrl(embedUrl);
-      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, 'User-Agent': 'Mozilla/5.0' } });
-      if (!res) return null;
-      const page = await res.text();
-      let m = page.match(/(https?:\/\/[^"'<>]+\.m3u8[^"'<>]*)/i) || page.match(/"file":"([^"]+)"/i) || page.match(/source\s+src=['"]([^'"]+)['"]/i);
-      if (m && m[1]) return normalizeUrl(m[1], embedUrl);
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  // ====== Main flow ======
+  // ====== Main logic ======
   try {
-    const pageRes = await httpGet(url, { headers: { Referer: url, 'User-Agent': 'Mozilla/5.0' } });
-    if (!pageRes) return JSON.stringify({ streams: [] });
-    const pageHtml = await pageRes.text();
+    const response = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+    if (!response) return JSON.stringify({ streams: [] });
+    const html = await response.text();
 
-    const anchorRe = /<a\b[^>]*\bdata-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+    // Find possible embed URLs or direct links in anchors or iframes
+    const anchorRe = /<a\b[^>]*\bhref\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))/gi;
+    const iframeRe = /<iframe[^>]+src=(?:(['"])(.*?)\1|([^\s>]+))/gi;
 
-    let match;
-    const providers = [];
-    const seen = new Set();
-    while ((match = anchorRe.exec(pageHtml)) !== null) {
-      const rawUrl = normalizeUrl(match[2] || match[3] || '', url);
-      let title = decodeHTMLEntities((match[4] || '').replace(/\s+/g, ' ').trim()) || rawUrl;
-      if (!rawUrl) continue;
-      if (seen.has(rawUrl)) continue;
+    const candidates = new Set();
 
-      // استبعاد روابط وسيرفرات ميجا وميجاماكس وديالي موشن
-      const titleLower = title.toLowerCase();
-      const rawUrlLower = rawUrl.toLowerCase();
-
-      if (
-        titleLower.includes('ميجا') ||
-        titleLower.includes('ميجا ماكس') ||
-        titleLower.includes('ديالي موشن') ||
-        rawUrlLower.includes('mega') ||
-        rawUrlLower.includes('megamax') ||
-        rawUrlLower.includes('dailymotion')
-      ) {
-        continue; // تجاهلها تماماً
-      }
-
-      seen.add(rawUrl);
-      providers.push({ rawUrl, title });
+    let m;
+    while ((m = anchorRe.exec(html)) !== null) {
+      const link = normalizeUrl(m[2] || m[3], url);
+      if (link) candidates.add(link);
     }
-
-    if (providers.length === 0) {
-      const ifr = pageHtml.match(/<iframe[^>]+src=(?:(['"])(.*?)\1|([^\s>]+))/i);
-      if (ifr) {
-        const raw = normalizeUrl(ifr[2] || ifr[3] || '', url);
-        const rawLower = raw.toLowerCase();
-        if (
-          !rawLower.includes('mega') &&
-          !rawLower.includes('megamax') &&
-          !rawLower.includes('dailymotion')
-        ) {
-          providers.push({ rawUrl: raw, title: 'iframe' });
-        }
-      }
+    while ((m = iframeRe.exec(html)) !== null) {
+      const link = normalizeUrl(m[2] || m[3], url);
+      if (link) candidates.add(link);
     }
 
     const streams = [];
-    for (const prov of providers) {
-      const u = prov.rawUrl;
 
-      // استبعاد نهائي إذا وصل هنا أي سيرفر محظور (احتياط)
-      const titleLower = (prov.title || '').toLowerCase();
-      const uLower = u.toLowerCase();
-      if (
-        titleLower.includes('ميجا') ||
-        titleLower.includes('ميجا ماكس') ||
-        titleLower.includes('ديالي موشن') ||
-        uLower.includes('mega') ||
-        uLower.includes('megamax') ||
-        uLower.includes('dailymotion')
-      ) {
-        continue;
-      }
-
-      let direct = null;
-
-      // لا تحاول استدعاء أي extractor خاص بـ Mega أو Dailymotion هنا (تم حذفهم تمامًا)
-      if (/mp4upload\.com/i.test(u)) {
-        direct = await extractMp4upload(u);
-      }
-      else if (/voe\.sx|voe\//i.test(u)) {
-        direct = await extractVoe(u);
-      }
-      else if (/vidmoly/i.test(u)) {
-        direct = await extractVidmoly(u);
-      }
-      else if (/uqload/i.test(u)) {
-        direct = await extractUqload(u);
-      }
-      else if (/d-s\.io|doodstream|dood/i.test(u)) {
-        direct = await extractDoodstream(u);
-      }
-      else if (/videa\.hu/i.test(u)) {
-        direct = await extractVidea(u);
-      }
-      else if (/megamax|megamax\.me/i.test(u)) {
-        direct = await extractMegamax(u);
-      }
-
-      if (!direct) {
+    for (const link of candidates) {
+      let result = null;
+      if (/uqload/i.test(link)) {
+        result = await uqloadExtractor(link);
+      } else if (/yourupload/i.test(link)) {
+        result = await youruploadExtractor(link);
+      } else if (/voe\.sx/i.test(link)) {
+        // For VOE, we need to fetch the page and parse
         try {
-          const r = await httpGet(u, { headers: { Referer: url, 'User-Agent': 'Mozilla/5.0' } });
-          if (r) {
-            const txt = await r.text();
-            const found = findSourceInHtml(txt);
-            if (found) direct = normalizeUrl(found, u);
+          const pageRes = await httpGet(link, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+          if (pageRes) {
+            const pageHtml = await pageRes.text();
+            result = await voeExtractor(pageHtml);
+          }
+        } catch {}
+      } else if (/doodstream|d-s\.io|dood/i.test(link)) {
+        try {
+          const pageRes = await httpGet(link, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+          if (pageRes) {
+            const pageHtml = await pageRes.text();
+            result = await doodstreamExtractor(pageHtml, link);
+          }
+        } catch {}
+      } else if (/filemoon/i.test(link)) {
+        try {
+          const pageRes = await httpGet(link, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+          if (pageRes) {
+            const pageHtml = await pageRes.text();
+            result = await filemoonExtractor(pageHtml, link);
+            if (result) result = { url: result, headers: { Referer: url } };
           }
         } catch {}
       }
 
-      if (direct) {
+      if (result && result.url) {
         streams.push({
-          title: prov.title || 'Server',
-          streamUrl: direct,
-          headers: { Referer: prov.rawUrl, 'User-Agent': 'Mozilla/5.0' }
-        });
-      } else {
-        streams.push({
-          title: prov.title + ' (embed)',
-          streamUrl: prov.rawUrl,
-          headers: { Referer: url, 'User-Agent': 'Mozilla/5.0' }
+          title: link,
+          streamUrl: result.url,
+          headers: result.headers || { Referer: url, "User-Agent": "Mozilla/5.0" },
         });
       }
     }
 
     return JSON.stringify({ streams });
-
   } catch (err) {
-    console.log('extractStreamUrl error:', err);
+    console.log("extractStreamUrl error:", err);
     return JSON.stringify({ streams: [] });
   }
 }
