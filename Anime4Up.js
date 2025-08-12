@@ -183,58 +183,49 @@ async function extractStreamUrl(url) {
     return raw;
   }
 
-  async function mp4uploadExtractor(html, url) {
-  // لازم نعطي url (صفحة embed) لاستخراج id الفيديو منها
-  if (!url) {
-    console.log("URL is required for mp4uploadExtractor");
-    return null;
+  async function extractMp4upload(embedUrl) {
+  embedUrl = normalizeUrl(embedUrl);
+  const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+  if (!res) return null;
+  const page = await res.text();
+
+  // 1. حاول تلاقي رابط mp4 من player.src أو file داخل السكربت
+  let m = page.match(/player\.src\(\{\s*(?:file|src)\s*:\s*['"]([^'"]+\.mp4)['"]/i) 
+        || page.match(/file:\s*'([^']+\.mp4)'/i) 
+        || page.match(/"file"\s*:\s*"([^"]+\.mp4)"/i);
+
+  if (m && m[1]) return normalizeUrl(m[1], embedUrl);
+
+  // 2. جرب استخراج روابط ملفات الفيديو من JSON داخل صفحة HTML (مع تجاهل ملفات m3u8)
+  const sourcesJsonMatch = page.match(/sources\s*:\s*(\[[^\]]+\])/i);
+  if (sourcesJsonMatch) {
+    try {
+      const sources = JSON.parse(sourcesJsonMatch[1].replace(/'/g, '"'));
+      if (sources.length) {
+        // ابحث عن أول ملف mp4 فقط
+        const mp4Source = sources.find(s => s.file && /\.mp4$/i.test(s.file));
+        if (mp4Source) return normalizeUrl(mp4Source.file, embedUrl);
+        // لو ما في mp4، حاول ترجع أول ملف عندك (غير m3u8 لكن عادة بيكون mp4)
+        const fallback = sources.find(s => s.file && !/\.m3u8/i.test(s.file));
+        if (fallback) return normalizeUrl(fallback.file, embedUrl);
+      }
+    } catch {}
   }
 
-  // 1. استخرج id الفيديو من الرابط أو من داخل html
-  let id = null;
-
-  // حاول استخراج id من الرابط نفسه إذا هو صفحة embed
-  let idMatchFromUrl = url.match(/embed-([a-z0-9]+)/i);
-  if (idMatchFromUrl) {
-    id = idMatchFromUrl[1];
-  } else {
-    // أو من داخل الصفحة
-    const idMatchFromHtml = html.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
-    if (idMatchFromHtml) id = idMatchFromHtml[1];
-  }
-
-  if (!id) {
-    console.log("Could not find video id for mp4upload");
-    return null;
-  }
-
-  // 2. استدعي API للحصول على رابط الفيديو
-  const apiUrl = `https://www.mp4upload.com/get_video?id=${id}`;
-  try {
-    const res = await fetch(apiUrl, {
-      headers: {
-        Referer: url,
-        Origin: "https://www.mp4upload.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        Accept: "application/json, text/javascript, */*; q=0.01",
-      },
-    });
-    if (!res.ok) {
-      console.log("Failed to fetch mp4upload video API");
-      return null;
+  // 3. محاولة ثانية للحصول على id الفيديو من الرابط وطلب API
+  let idMatch = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
+  if (idMatch && idMatch[1]) {
+    const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${idMatch[1]}`, { headers: { Referer: embedUrl } });
+    if (trial) {
+      const txt = await trial.text();
+      try {
+        const j = JSON.parse(txt);
+        if (j && j.file && /\.mp4$/i.test(j.file)) return normalizeUrl(j.file, embedUrl);
+      } catch {}
     }
-    const json = await res.json();
-
-    if (json && json.file) {
-      return json.file; // رابط مباشر للفيديو
-    } else {
-      console.log("API response has no 'file' field");
-      return null;
-    }
-  } catch (e) {
-    console.log("Error fetching mp4upload API:", e);
-    return null;
   }
+
+  return null;
 }
 
   async function extractUqload(embedUrl) {
