@@ -183,64 +183,58 @@ async function extractStreamUrl(url) {
     return raw;
   }
 
-  async function extractMp4upload(embedUrl) {
-  embedUrl = normalizeUrl(embedUrl);
-
-  const headers = {
-    Referer: embedUrl,
-    Origin: "https://www.mp4upload.com",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-  };
-
-  const res = await httpGet(embedUrl, { headers });
-  if (!res) return null;
-
-  const page = await res.text();
-
-  // 1. حاول استخراج id الفيديو من السكربت (غالبا يكون ضمن رابط get_video?id=)
-  const idMatch = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
-  if (!idMatch || !idMatch[1]) {
-    // أحيانا يكون id داخل بيانات JSON مشفرة أو ضمن سكريبت آخر، لكن غالبا هذا يكفي
+  async function mp4uploadExtractor(html, url) {
+  // لازم نعطي url (صفحة embed) لاستخراج id الفيديو منها
+  if (!url) {
+    console.log("URL is required for mp4uploadExtractor");
     return null;
   }
-  const videoId = idMatch[1];
 
-  // 2. استدعي API للحصول على رابط الفيديو المباشر
-  const apiUrl = `https://www.mp4upload.com/get_video?id=${videoId}`;
+  // 1. استخرج id الفيديو من الرابط أو من داخل html
+  let id = null;
 
+  // حاول استخراج id من الرابط نفسه إذا هو صفحة embed
+  let idMatchFromUrl = url.match(/embed-([a-z0-9]+)/i);
+  if (idMatchFromUrl) {
+    id = idMatchFromUrl[1];
+  } else {
+    // أو من داخل الصفحة
+    const idMatchFromHtml = html.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
+    if (idMatchFromHtml) id = idMatchFromHtml[1];
+  }
+
+  if (!id) {
+    console.log("Could not find video id for mp4upload");
+    return null;
+  }
+
+  // 2. استدعي API للحصول على رابط الفيديو
+  const apiUrl = `https://www.mp4upload.com/get_video?id=${id}`;
   try {
-    const apiRes = await httpGet(apiUrl, {
+    const res = await fetch(apiUrl, {
       headers: {
-        Referer: embedUrl,
+        Referer: url,
         Origin: "https://www.mp4upload.com",
-        "User-Agent": headers["User-Agent"],
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         Accept: "application/json, text/javascript, */*; q=0.01",
       },
     });
-    if (!apiRes) return null;
-
-    const apiText = await apiRes.text();
-
-    // 3. حاول تحويل النص إلى JSON
-    let json;
-    try {
-      json = JSON.parse(apiText);
-    } catch {
+    if (!res.ok) {
+      console.log("Failed to fetch mp4upload video API");
       return null;
     }
+    const json = await res.json();
 
-    // 4. تحقق من وجود رابط الفيديو داخل JSON
     if (json && json.file) {
-      return normalizeUrl(json.file, embedUrl);
+      return json.file; // رابط مباشر للفيديو
+    } else {
+      console.log("API response has no 'file' field");
+      return null;
     }
-
   } catch (e) {
-    // فشل الطلب أو التحليل
+    console.log("Error fetching mp4upload API:", e);
     return null;
   }
-
-  return null;
 }
 
   async function extractUqload(embedUrl) {
