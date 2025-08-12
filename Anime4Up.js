@@ -150,7 +150,6 @@ async function extractEpisodes(url) {
 // Sora-ready extractStreamUrl
 // -------------------------------
 async function extractStreamUrl(url) {
-  // ==== Utilities ====
   const hasFetchV2 = typeof fetchv2 === "function";
   async function httpGet(u, opts = {}) {
     try {
@@ -184,18 +183,37 @@ async function extractStreamUrl(url) {
     return raw;
   }
 
-  // ==== Extractors ====
-
   async function extractMp4upload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const page = await res.text();
-    let m = page.match(/player\.src\(\{\s*(?:file|src)\s*:\s*['"]([^'"]+)['"]/i) || page.match(/file:\s*'([^']+)'/i) || page.match(/"file"\s*:\s*"([^"]+)"/i);
+
+    // حاول تلاقي ملف فيديو من player.src
+    let m = page.match(/player\.src\(\{\s*(?:file|src)\s*:\s*['"]([^'"]+)['"]/i) 
+          || page.match(/file:\s*'([^']+)'/i) 
+          || page.match(/"file"\s*:\s*"([^"]+)"/i);
+
     if (m && m[1]) return normalizeUrl(m[1], embedUrl);
-    m = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
-    if (m && m[1]) {
-      const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${m[1]}`, { headers: { Referer: embedUrl } });
+
+    // جرب استخراج ملف فيديو من JSON داخل صفحة HTML
+    const sourcesJsonMatch = page.match(/sources\s*:\s*(\[[^\]]+\])/i);
+    if (sourcesJsonMatch) {
+      try {
+        const sources = JSON.parse(sourcesJsonMatch[1].replace(/'/g, '"'));
+        if (sources.length) {
+          // نفضل ملفات m3u8 أو mp4 حسب التوفر
+          const hls = sources.find(s => s.file && /\.m3u8/i.test(s.file));
+          if (hls) return normalizeUrl(hls.file, embedUrl);
+          return normalizeUrl(sources[0].file, embedUrl);
+        }
+      } catch {}
+    }
+
+    // محاولة ثانية للحصول على id الفيديو من الرابط
+    let idMatch = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
+    if (idMatch && idMatch[1]) {
+      const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${idMatch[1]}`, { headers: { Referer: embedUrl } });
       if (trial) {
         const txt = await trial.text();
         try {
@@ -213,8 +231,15 @@ async function extractStreamUrl(url) {
     const res = await httpGet(embedUrl, { headers });
     if (!res) return null;
     const html = await res.text();
-    const match = html.match(/sources:\s*\[\s*"([^"]+\.mp4)"\s*\]/);
+
+    // جرب البحث عن sources بمصفوفة URLs
+    let match = html.match(/sources:\s*\[\s*"(https?:[^"]+\.mp4)"\s*\]/i);
     if (match && match[1]) return normalizeUrl(match[1], embedUrl);
+
+    // جرب البحث عن مصدر فيديو ضمن فيديو HTML
+    match = html.match(/<video[^>]+src=['"]([^'"]+\.mp4)['"]/i);
+    if (match && match[1]) return normalizeUrl(match[1], embedUrl);
+
     return null;
   }
 
@@ -224,8 +249,21 @@ async function extractStreamUrl(url) {
     const res = await httpGet(embedUrl, { headers });
     if (!res) return null;
     const html = await res.text();
-    const match = html.match(/file:\s*['"]([^'"]+\.mp4)['"]/);
+
+    let match = html.match(/file:\s*['"]([^'"]+\.mp4)['"]/i);
     if (match && match[1]) return normalizeUrl(match[1], embedUrl);
+
+    match = html.match(/sources\s*:\s*(\[[^\]]+\])/i);
+    if (match) {
+      try {
+        const sources = JSON.parse(match[1].replace(/'/g, '"'));
+        if (sources.length) return normalizeUrl(sources[0].file, embedUrl);
+      } catch {}
+    }
+
+    match = html.match(/<video[^>]+src=['"]([^'"]+\.mp4)['"]/i);
+    if (match && match[1]) return normalizeUrl(match[1], embedUrl);
+
     return null;
   }
 
@@ -235,13 +273,10 @@ async function extractStreamUrl(url) {
     if (!res) return null;
     const html = await res.text();
 
-    // Try direct source
     let m = html.match(/file\s*:\s*['"]([^'"]+)['"]/i);
     if (!m) m = html.match(/"file"\s*:\s*"([^"]+)"/i);
+    if (!m) m = html.match(/sources\s*:\s*\[\s*{\s*file\s*:\s*['"]([^'"]+)['"]/i);
     if (m && m[1]) return normalizeUrl(m[1], embedUrl);
-
-    // Try unpack eval if present (you can add unpackEval func if needed)
-    // Skipped here for brevity
 
     return null;
   }
@@ -269,7 +304,6 @@ async function extractStreamUrl(url) {
     }
     if (!json || !json.data) return null;
     if (Array.isArray(json.data)) {
-      // prefer HLS if available
       const hls = json.data.find((s) => s.file && /\.m3u8/i.test(s.file));
       if (hls) return normalizeUrl(hls.file, embedUrl);
       if (json.data[0] && json.data[0].file) return normalizeUrl(json.data[0].file, embedUrl);
@@ -278,7 +312,6 @@ async function extractStreamUrl(url) {
   }
 
   async function extractFilemoon(html, baseUrl) {
-    // Simple logic: extract iframe src then extract master.m3u8 from eval packed script
     const iframeMatch = html.match(/<iframe[^>]+src="([^"]+)"[^>]*><\/iframe>/i);
     if (!iframeMatch) return null;
     const iframeUrl = normalizeUrl(iframeMatch[1], baseUrl);
@@ -286,24 +319,8 @@ async function extractStreamUrl(url) {
     if (!res) return null;
     const iframeHtml = await res.text();
 
-    // Find eval packed script with master.m3u8 url
-    const evalMatch = iframeHtml.match(/eval\(function\(p,a,c,k,e,d\)[\s\S]+?\)\)/);
-    if (!evalMatch) return null;
-
-    // unpackEval function required - quick basic version:
-    function unpackEval(packed) {
-      try {
-        // Using external unpacker libs or your own implementation needed here.
-        // For demo, just return null
-        return null;
-      } catch {
-        return null;
-      }
-    }
-    const unpacked = unpackEval(evalMatch[0]);
-    if (!unpacked) return null;
-
-    const m3u8Match = unpacked.match(/https?:\/\/[^"']+master\.m3u8[^"']*/i);
+    // بما أن unpackEval غير معرف هنا، نحاول البحث مباشرة عن رابط m3u8
+    const m3u8Match = iframeHtml.match(/https?:\/\/[^"']+master\.m3u8[^"']*/i);
     if (m3u8Match) return normalizeUrl(m3u8Match[0], iframeUrl);
     return null;
   }
@@ -314,7 +331,6 @@ async function extractStreamUrl(url) {
     if (!pageRes) return JSON.stringify({ streams: [] });
     const pageHtml = await pageRes.text();
 
-    // Extract links from <a data-ep-url="..." ...> and iframe src
     const anchorRe = /<a\b[^>]*\bdata-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
     const iframeRe = /<iframe[^>]+src=(?:(['"])(.*?)\1|([^\s>]+))/gi;
 
@@ -322,22 +338,19 @@ async function extractStreamUrl(url) {
     const providers = [];
     const seen = new Set();
 
-    // Extract anchors
     let match;
     while ((match = anchorRe.exec(pageHtml)) !== null) {
       const rawUrl = normalizeUrl(match[2] || match[3] || "", url);
-      let title = (match[4] || rawUrl).replace(/\s+/g, " ").trim();
-      const titleLower = title.toLowerCase();
       const rawUrlLower = rawUrl.toLowerCase();
 
       if (seen.has(rawUrl)) continue;
-      if (blockedKeywords.some((kw) => titleLower.includes(kw) || rawUrlLower.includes(kw))) continue;
+      if (blockedKeywords.some((kw) => rawUrlLower.includes(kw))) continue;
 
       seen.add(rawUrl);
+      let title = (match[4] || rawUrl).replace(/\s+/g, " ").trim();
       providers.push({ rawUrl, title });
     }
 
-    // Extract iframe if no anchors
     if (providers.length === 0) {
       let ifrMatch;
       while ((ifrMatch = iframeRe.exec(pageHtml)) !== null) {
@@ -355,7 +368,6 @@ async function extractStreamUrl(url) {
     for (const prov of providers) {
       const u = prov.rawUrl.toLowerCase();
 
-      // Extra safety filter
       if (blockedKeywords.some((kw) => u.includes(kw))) continue;
 
       let direct = null;
