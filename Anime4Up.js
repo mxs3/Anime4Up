@@ -184,46 +184,64 @@ async function extractStreamUrl(url) {
   }
 
   async function extractMp4upload(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const page = await res.text();
+  embedUrl = normalizeUrl(embedUrl);
 
-    // حاول تلاقي ملف فيديو من player.src
-    let m = page.match(/player\.src\(\{\s*(?:file|src)\s*:\s*['"]([^'"]+)['"]/i) 
-          || page.match(/file:\s*'([^']+)'/i) 
-          || page.match(/"file"\s*:\s*"([^"]+)"/i);
+  const headers = {
+    Referer: embedUrl,
+    Origin: "https://www.mp4upload.com",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  };
 
-    if (m && m[1]) return normalizeUrl(m[1], embedUrl);
+  const res = await httpGet(embedUrl, { headers });
+  if (!res) return null;
 
-    // جرب استخراج ملف فيديو من JSON داخل صفحة HTML
-    const sourcesJsonMatch = page.match(/sources\s*:\s*(\[[^\]]+\])/i);
-    if (sourcesJsonMatch) {
-      try {
-        const sources = JSON.parse(sourcesJsonMatch[1].replace(/'/g, '"'));
-        if (sources.length) {
-          // نفضل ملفات m3u8 أو mp4 حسب التوفر
-          const hls = sources.find(s => s.file && /\.m3u8/i.test(s.file));
-          if (hls) return normalizeUrl(hls.file, embedUrl);
-          return normalizeUrl(sources[0].file, embedUrl);
-        }
-      } catch {}
-    }
+  const page = await res.text();
 
-    // محاولة ثانية للحصول على id الفيديو من الرابط
-    let idMatch = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
-    if (idMatch && idMatch[1]) {
-      const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${idMatch[1]}`, { headers: { Referer: embedUrl } });
-      if (trial) {
-        const txt = await trial.text();
-        try {
-          const j = JSON.parse(txt);
-          if (j && j.file) return normalizeUrl(j.file, embedUrl);
-        } catch {}
-      }
-    }
+  // 1. حاول استخراج id الفيديو من السكربت (غالبا يكون ضمن رابط get_video?id=)
+  const idMatch = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
+  if (!idMatch || !idMatch[1]) {
+    // أحيانا يكون id داخل بيانات JSON مشفرة أو ضمن سكريبت آخر، لكن غالبا هذا يكفي
     return null;
   }
+  const videoId = idMatch[1];
+
+  // 2. استدعي API للحصول على رابط الفيديو المباشر
+  const apiUrl = `https://www.mp4upload.com/get_video?id=${videoId}`;
+
+  try {
+    const apiRes = await httpGet(apiUrl, {
+      headers: {
+        Referer: embedUrl,
+        Origin: "https://www.mp4upload.com",
+        "User-Agent": headers["User-Agent"],
+        Accept: "application/json, text/javascript, */*; q=0.01",
+      },
+    });
+    if (!apiRes) return null;
+
+    const apiText = await apiRes.text();
+
+    // 3. حاول تحويل النص إلى JSON
+    let json;
+    try {
+      json = JSON.parse(apiText);
+    } catch {
+      return null;
+    }
+
+    // 4. تحقق من وجود رابط الفيديو داخل JSON
+    if (json && json.file) {
+      return normalizeUrl(json.file, embedUrl);
+    }
+
+  } catch (e) {
+    // فشل الطلب أو التحليل
+    return null;
+  }
+
+  return null;
+}
 
   async function extractUqload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
