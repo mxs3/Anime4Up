@@ -1,10 +1,10 @@
 async function searchResults(keyword) {
   try {
-    const url = `https://4p.jguris.shop/?search_param=animes&s=${encodeURIComponent(keyword)}`;
+    const url = `https://4q.4ruhzd.shop/?search_param=animes&s=${encodeURIComponent(keyword)}`;
     const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://4p.jguris.shop/'
+        'Referer': 'https://4q.4ruhzd.shop/'
       }
     });
     const html = await res.text();
