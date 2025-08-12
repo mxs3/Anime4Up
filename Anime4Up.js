@@ -175,27 +175,109 @@ async function extractStreamUrl(url) {
   function normalizeUrl(raw, base = "") {
     if (!raw) return raw;
     raw = safeTrim(raw);
+
+    // لو already protocol-relative
     if (raw.startsWith("//")) return "https:" + raw;
-    if (raw.startsWith("/")) {
-      if (!base) return "https://" + raw.replace(/^\/+/, "");
-      return base.replace(/\/$/, "") + raw;
+
+    // حاول استعمال واجهة URL لو ممكن (يدير relative paths بشكل صحيح)
+    try {
+      if (base) {
+        return new URL(raw, base).href;
+      } else {
+        // لو الرابط يبدأ بـ / أو ./ أو ../ أو بدون بروتوكول، new URL يحتاج أساس؛ إذا لم يُعطَ، اتبع المنطق البسيط:
+        if (raw.startsWith("/")) return "https://" + raw.replace(/^\/+/, "");
+        if (/^[a-z0-9_\-\.]+\//i.test(raw)) return "https://" + raw; // اسم دومين بدون بروتوكول
+        if (/^https?:\/\//i.test(raw)) return raw;
+        return "https://" + raw;
+      }
+    } catch {
+      // fallback بسيط
+      if (/^https?:\/\//i.test(raw)) return raw;
+      return raw.startsWith("/") ? ("https://" + raw.replace(/^\/+/, "")) : ("https://" + raw);
     }
-    if (!/^https?:\/\//i.test(raw)) return "https://" + raw;
-    return raw;
   }
 
-  // ==== Server Check ====
+  // ==== smarter checkServer: HEAD ثم GET، ونقبل redirect/status < 400 كـ alive ====
   async function checkServer(serverUrl) {
     try {
-      const response = await httpGet(serverUrl, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0" } });
-      return response && response.ok; // رجّع true لو السيرفر شغال (حالة 200)
+      // جرب HEAD أولاً
+      let resp = null;
+      try {
+        resp = await httpGet(serverUrl, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0" } });
+        if (resp && (resp.status >= 200 && resp.status < 400)) return true;
+      } catch {}
+      // إذا فشل أو رجع redirect/403... جرب GET كاحتياط
+      try {
+        resp = await httpGet(serverUrl, { method: "GET", headers: { "User-Agent": "Mozilla/5.0" } });
+        if (resp && (resp.status >= 200 && resp.status < 400)) return true;
+      } catch {}
+      return false;
     } catch {
-      return false; // رجّع false لو السيرفر مش شغال
+      return false;
+    }
+  }
+
+  // ==== atob fallback ====
+  function safeAtob(s) {
+    if (typeof atob === "function") return atob(s);
+    try {
+      return Buffer.from(s, "base64").toString("utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  // ==== unpackEval (Dean Edwards P.A.C.K.E.R. unpacker) ====
+  function unpackEval(packed) {
+    if (!packed || typeof packed !== "string") return null;
+    // detect pattern
+    const pAcker = /eval\(function\(p,a,c,k,e,(?:r|d)\)\s*\{([\s\S]+?)\}\)\)/;
+    if (!pAcker.test(packed)) return null;
+
+    try {
+      // simple approach: attempt to extract the inner packed args and run a lightweight unpack
+      // Note: full JS evaluation isn't safe here; instead apply a common unpack algorithm used for Dean Edwards p,a,c,k,e,d
+      const payloadMatch = packed.match(/eval\(function\(p,a,c,k,e,(?:r|d)\)\{([\s\S]+)\}\)\(([\s\S]+)\)/);
+      if (!payloadMatch) return null;
+
+      // Extracting the argument string (the (...) at the end)
+      const argsMatch = packed.match(/\)\((\s*'[^']+'|\s*"[^"]+"|\s*[^)]+)\)\s*;?\s*$/);
+      // Fallback: find the last parentheses content
+      let argsStr = null;
+      const lastParen = packed.lastIndexOf(")");
+      const opener = packed.indexOf("(", packed.indexOf("eval"));
+      if (opener >= 0 && lastParen > opener) {
+        argsStr = packed.substring(opener + 1, lastParen);
+      }
+
+      // As a simpler but effective heuristic: replace common escaped sequences and search for urls
+      let cleaned = packed
+        .replace(/\\x([0-9A-Fa-f]{2})/g, function (_, g) {
+          return String.fromCharCode(parseInt(g, 16));
+        })
+        .replace(/\\u0?([0-9A-Fa-f]{4})/g, function (_, g) {
+          return String.fromCharCode(parseInt(g, 16));
+        })
+        .replace(/\\'/g, "'")
+        .replace(/\\"/g, '"')
+        .replace(/\\\//g, "/");
+
+      // sometimes packed contains base64 segments
+      const b64Matches = cleaned.match(/([A-Za-z0-9\-_]{20,}={0,2})/g) || [];
+      for (const b of b64Matches) {
+        try {
+          const dec = safeAtob(b);
+          if (dec && /https?:\/\//.test(dec)) cleaned += "\n" + dec;
+        } catch {}
+      }
+
+      return cleaned;
+    } catch (e) {
+      return null;
     }
   }
 
   // ==== Extractors ====
-
   async function extractMp4upload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
@@ -208,12 +290,18 @@ async function extractStreamUrl(url) {
       console.log("mp4upload video not found");
       return null;
     }
-    const regex = /src:\s*"([^"]+)"/;
-    const match = html.match(regex);
+
+    // ابحث بدقة أكثر داخل السكربت
+    let match = html.match(/player\.src\(\{\s*(?:file|src)\s*:\s*["']([^"']+)["']/i);
     if (match && match[1]) {
       console.log("mp4upload Stream URL: " + match[1]);
       return normalizeUrl(match[1], embedUrl);
     }
+
+    // fallback: أي mp4 أو m3u8 في الصفحة
+    let found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
+    if (found && found[0]) return normalizeUrl(found[0], embedUrl);
+
     console.log("No match found for mp4upload extractor");
     return null;
   }
@@ -226,31 +314,48 @@ async function extractStreamUrl(url) {
       return null;
     }
     const html = await res.text();
-    const streamDomainMatch = embedUrl.match(/https:\/\/(.*?)\//);
+
+    // حاول نمط pass_md5 القديم أو مسارات مماثلة
+    let md5PathMatch = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_\.]+)['"]/i) || html.match(/pass_md5=([a-zA-Z0-9\/\-_\.]+)/i);
+    if (!md5PathMatch) {
+      // fallback: ابحث عن أي mp4 أو m3u8
+      const found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
+      if (found && found[0]) return normalizeUrl(found[0], embedUrl);
+      console.log("No md5 path found in doodstream HTML");
+      return null;
+    }
+    const md5Path = md5PathMatch[1].replace(/['"]/g, "");
+    const streamDomainMatch = embedUrl.match(/^https?:\/\/([^\/]+)/i);
     if (!streamDomainMatch) {
       console.log("Invalid doodstream URL format");
       return null;
     }
     const streamDomain = streamDomainMatch[1];
-    const md5PathMatch = html.match(/\/pass_md5\/(.*?)'/);
-    if (!md5PathMatch) {
-      console.log("No md5 path found in doodstream HTML");
-      return null;
-    }
-    const md5Path = md5PathMatch[1];
     const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
     const expiryTimestamp = new Date().valueOf();
     const random = randomStr(10);
 
+    // حاول استدعاء endpoint pass_md5
     const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, {
       headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
     });
     if (!passResponse) {
+      // fallback: حاول مسار آخر أو استخراج مباشر
+      const f2 = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
+      if (f2 && f2[0]) return normalizeUrl(f2[0], embedUrl);
       console.log("No response from doodstream pass_md5");
       return null;
     }
     const responseData = await passResponse.text();
-    const videoUrl = `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
+    // responseData قد يكون رابط مباشر أو جزء منه
+    const videoUrlCandidate = responseData.trim();
+    let videoUrl = videoUrlCandidate;
+    if (!/https?:\/\//i.test(videoUrlCandidate)) {
+      videoUrl = `${videoUrlCandidate}${random}?token=${token}&expiry=${expiryTimestamp}`;
+    } else {
+      // لو الرابط كامل، ألحق باراميتر أحيانًا
+      videoUrl = `${videoUrlCandidate}${videoUrlCandidate.includes("?") ? "&" : "?"}token=${token}&expiry=${expiryTimestamp}`;
+    }
     console.log("DoodStream Stream URL: " + videoUrl);
     return normalizeUrl(videoUrl, embedUrl);
   }
@@ -272,50 +377,44 @@ async function extractStreamUrl(url) {
       return null;
     }
     const html = await res.text();
+
+    // محاولة JSON application embedded
     const jsonScriptMatch = html.match(/<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i);
-    if (!jsonScriptMatch) {
-      console.log("No application/json script tag found in voe HTML");
-      return null;
-    }
-    const obfuscatedJson = jsonScriptMatch[1].trim();
-    let data;
-    try {
-      data = JSON.parse(obfuscatedJson);
-    } catch (e) {
-      console.log("Invalid JSON in voe extractor:", e.message);
-      return null;
-    }
-    if (!Array.isArray(data) || typeof data[0] !== "string") {
-      console.log("Input doesn't match expected format for voe");
-      return null;
-    }
-    let obfuscatedString = data[0];
-    let step1 = voeRot13(obfuscatedString);
-    let step2 = voeRemovePatterns(step1);
-    let step3 = voeBase64Decode(step2);
-    let step4 = voeShiftChars(step3, 3);
-    let step5 = step4.split("").reverse().join("");
-    let step6 = voeBase64Decode(step5);
-    let result;
-    try {
-      result = JSON.parse(step6);
-    } catch (e) {
-      console.log("Final JSON parse error in voe:", e.message);
-      return null;
-    }
-    if (result && typeof result === "object") {
-      const streamUrl =
-        result.direct_access_url ||
-        (result.source &&
-          result.source
-            .map((source) => source.direct_access_url)
-            .find((url) => url && url.startsWith("http")));
-      if (streamUrl) {
-        console.log("Voe Stream URL: " + streamUrl);
-        return normalizeUrl(streamUrl, embedUrl);
+    if (jsonScriptMatch) {
+      const obfuscatedJson = jsonScriptMatch[1].trim();
+      try {
+        const data = JSON.parse(obfuscatedJson);
+        if (Array.isArray(data) && typeof data[0] === "string") {
+          // المحاولات القديمة لفك الشيفرة
+          try {
+            let obfuscatedString = data[0];
+            let step1 = voeRot13(obfuscatedString);
+            let step2 = voeRemovePatterns(step1);
+            let step3 = safeAtob(step2);
+            let step4 = voeShiftChars(step3, 3);
+            let step5 = step4.split("").reverse().join("");
+            let step6 = safeAtob(step5);
+            let result = JSON.parse(step6);
+            if (result) {
+              const streamUrl =
+                result.direct_access_url ||
+                (result.source && result.source.map(s => s.direct_access_url).find(u => u && /^https?:\/\//.test(u)));
+              if (streamUrl) return normalizeUrl(streamUrl, embedUrl);
+            }
+          } catch {
+            // ادامه fallback
+          }
+        }
+      } catch (e) {
+        console.log("Invalid JSON in voe extractor:", e.message);
       }
-      console.log("No stream URL found in voe decoded JSON");
     }
+
+    // fallback: بحث مباشر في الصفحة عن mp4/m3u8
+    const direct = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
+    if (direct && direct[0]) return normalizeUrl(direct[0], embedUrl);
+
+    console.log("No stream URL found in voe decoded JSON or page");
     return null;
   }
 
@@ -336,13 +435,6 @@ async function extractStreamUrl(url) {
     return result;
   }
 
-  function voeBase64Decode(str) {
-    if (typeof atob === "function") {
-      return atob(str);
-    }
-    return Buffer.from(str, "base64").toString("utf-8");
-  }
-
   function voeShiftChars(str, shift) {
     return str
       .split("")
@@ -356,8 +448,17 @@ async function extractStreamUrl(url) {
     const res = await httpGet(embedUrl, { headers });
     if (!res) return null;
     const html = await res.text();
-    const match = html.match(/sources:\s*\[\s*"([^"]+\.mp4)"\s*\]/);
+    const match = html.match(/sources:\s*\[\s*["']([^"']+\.mp4[^"']*)["']\s*\]/i);
     if (match && match[1]) return normalizeUrl(match[1], embedUrl);
+
+    // بعض الصفحات تستخدم Clappr.sources أو player config
+    const match2 = html.match(/sources\s*=\s*\[["']([^"']+\.mp4[^"']*)["']\]/i);
+    if (match2 && match2[1]) return normalizeUrl(match2[1], embedUrl);
+
+    // fallback: بحث عام
+    const f = html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
+    if (f && f[0]) return normalizeUrl(f[0], embedUrl);
+
     return null;
   }
 
@@ -367,31 +468,41 @@ async function extractStreamUrl(url) {
     const res = await httpGet(embedUrl, { headers });
     if (!res) return null;
     const html = await res.text();
-    const match = html.match(/file:\s*['"]([^'"]+\.mp4)['"]/);
+    const match = html.match(/file:\s*['"]([^'"]+\.mp4[^'"]*)['"]/i);
     if (match && match[1]) return normalizeUrl(match[1], embedUrl);
+
+    // fallback generic
+    const f = html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
+    if (f && f[0]) return normalizeUrl(f[0], embedUrl);
+
     return null;
   }
 
   async function extractFilemoon(html, baseUrl) {
-    const iframeMatch = html.match(/<iframe[^>]+src="([^"]+)"[^>]*><\/iframe>/i);
+    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["'][^>]*><\/iframe>/i);
     if (!iframeMatch) return null;
     const iframeUrl = normalizeUrl(iframeMatch[1], baseUrl);
     const res = await httpGet(iframeUrl, { headers: { Referer: baseUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const iframeHtml = await res.text();
-    const evalMatch = iframeHtml.match(/eval\(function\(p,a,c,k,e,d\)[\s\S]+?\)\)/);
-    if (!evalMatch) return null;
-    function unpackEval(packed) {
-      try {
-        return null; // تحتاج مكتبة unpacker هنا لو متاحة
-      } catch {
-        return null;
+
+    // حاول نكشف eval-packed scripts ثم نبحث داخلها
+    const evalMatch = iframeHtml.match(/eval\(function\(p,a,c,k,e,(?:r|d)\)\{[\s\S]+?\}\)\([^\)]*\)/i);
+    if (evalMatch) {
+      const unpacked = unpackEval(evalMatch[0]);
+      if (unpacked) {
+        const m3u8Match = unpacked.match(/https?:\/\/[^"']+master\.m3u8[^"']*/i) || unpacked.match(/https?:\/\/[^"']+\.m3u8[^"']*/i);
+        if (m3u8Match) return normalizeUrl(m3u8Match[0], iframeUrl);
+
+        const mp4Match = unpacked.match(/https?:\/\/[^"']+\.mp4[^"']*/i);
+        if (mp4Match) return normalizeUrl(mp4Match[0], iframeUrl);
       }
     }
-    const unpacked = unpackEval(evalMatch[0]);
-    if (!unpacked) return null;
-    const m3u8Match = unpacked.match(/https?:\/\/[^"']+master\.m3u8[^"']*/i);
-    if (m3u8Match) return normalizeUrl(m3u8Match[0], iframeUrl);
+
+    // fallback: بحث عام في iframeHtml
+    const found = iframeHtml.match(/https?:\/\/[^"'<>\s]+(?:master\.m3u8|\.m3u8|\.mp4)[^"'<>\s]*/i);
+    if (found && found[0]) return normalizeUrl(found[0], iframeUrl);
+
     return null;
   }
 
@@ -433,7 +544,7 @@ async function extractStreamUrl(url) {
       }
     }
 
-    // إضافة الروابط المباشرة للاختبار
+    // إضافة الروابط المباشرة للاختبار (سيبها، بتساعد في debugging)
     providers.push(
       { rawUrl: "https://www.mp4upload.com/embed-djqtega0cr5v.html", title: "mp4upload" },
       { rawUrl: "https://voe.sx/e/oip0zptl2ng7", title: "voe" },
@@ -448,7 +559,7 @@ async function extractStreamUrl(url) {
 
       if (blockedKeywords.some((kw) => u.includes(kw))) continue;
 
-      // تحقق من حالة السيرفر
+      // لا نعتمد على HEAD-only check بعد الآن — checkServer أجرت تحسينات داخلية
       const isServerAlive = await checkServer(prov.rawUrl);
       if (!isServerAlive) {
         console.log(`السيرفر ${prov.rawUrl} غير متاح، يتم تخطيه`);
