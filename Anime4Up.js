@@ -282,22 +282,22 @@ async function extractStreamUrl(url) {
     embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
-    const html = await res.text();
-
-    // ابحث في عدة أنماط معروفة
-    let match =
-      html.match(/player\.src\(\{\s*type:\s*['"]video\/mp4['"],\s*src:\s*['"]([^'"]+)/) ||
-      html.match(/sources\s*:\s*\[\s*["']([^"']+\.mp4[^"']*)["']/i) ||
-      html.match(/file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i);
-
-    if (match && match[1]) {
-      return [{ url: normalizeUrl(match[1], embedUrl), quality: "Auto" }];
+    const page = await res.text();
+    let m = page.match(/player\.src\(\{\s*(?:file|src)\s*:\s*['"]([^'"]+)['"]/i) || page.match(/file:\s*'([^']+)'/i) || page.match(/"file"\s*:\s*"([^"]+)"/i);
+    if (m && m[1]) return normalizeUrl(m[1], embedUrl);
+    m = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
+    if (m && m[1]) {
+      const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${m[1]}`, { headers: { Referer: embedUrl } });
+      if (trial) {
+        const txt = await trial.text();
+        try {
+          const j = JSON.parse(txt);
+          if (j && j.file) return normalizeUrl(j.file, embedUrl);
+        } catch {}
+      }
     }
-
-    // fallback: أي mp4 مباشر في الصفحة
-    const f = html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
-    return f ? [{ url: normalizeUrl(f[0], embedUrl), quality: "Auto" }] : null;
-    }
+    return null;
+  }
 
   async function extractDoodstream(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
