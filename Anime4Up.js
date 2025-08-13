@@ -219,24 +219,12 @@ async function extractStreamUrl(url) {
   }
 
   async function extractMp4upload(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
+    const res = await soraFetch(embedUrl, { headers: { Referer: embedUrl } });
     const html = await res.text();
-    if (html.includes("video you are looking for is not found")) return null;
-
-    const evalMatch = html.match(/eval\(function\(p,a,c,k,e,(?:r|d)\)\{[\s\S]+?\}\)\([^\)]*\)/i);
-    if (evalMatch) {
-      const unpacked = unpackEval(evalMatch[0]);
-      if (unpacked) {
-        const found = unpacked.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-        if (found) return normalizeUrl(found[0], embedUrl);
-      }
-    }
-
-    const match = html.match(/player\.src\(\{\s*(?:file|src)\s*:\s*["']([^"']+)["']/i) || html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-    return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
-  }
+    const match = html.match(/player\.src\(\{\s*type:\s*['"]video\/mp4['"],\s*src:\s*['"]([^'"]+)['"]/);
+    if (!match) return [];
+    return [{ url: match[1], quality: 'Auto' }];
+}
 
   async function extractUqload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
