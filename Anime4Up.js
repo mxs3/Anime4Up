@@ -279,32 +279,12 @@ async function extractStreamUrl(url) {
 
   // ==== Extractors ====
   async function extractMp4upload(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) {
-      console.log("No response from mp4upload server");
-      return null;
-    }
+    const res = await soraFetch(embedUrl, { headers: { Referer: embedUrl } });
     const html = await res.text();
-    if (html.includes("video you are looking for is not found")) {
-      console.log("mp4upload video not found");
-      return null;
-    }
-
-    // ابحث بدقة أكثر داخل السكربت
-    let match = html.match(/player\.src\(\{\s*(?:file|src)\s*:\s*["']([^"']+)["']/i);
-    if (match && match[1]) {
-      console.log("mp4upload Stream URL: " + match[1]);
-      return normalizeUrl(match[1], embedUrl);
-    }
-
-    // fallback: أي mp4 أو m3u8 في الصفحة
-    let found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-    if (found && found[0]) return normalizeUrl(found[0], embedUrl);
-
-    console.log("No match found for mp4upload extractor");
-    return null;
-  }
+    const match = html.match(/player\.src\(\{\s*type:\s*['"]video\/mp4['"],\s*src:\s*['"]([^'"]+)['"]/);
+    if (!match) return [];
+    return [{ url: match[1], quality: 'Auto' }];
+}
 
   async function extractDoodstream(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
