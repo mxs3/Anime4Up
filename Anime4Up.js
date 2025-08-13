@@ -279,12 +279,25 @@ async function extractStreamUrl(url) {
 
   // ==== Extractors ====
   async function extractMp4upload(embedUrl) {
-    const res = await soraFetch(embedUrl, { headers: { Referer: embedUrl } });
+    embedUrl = normalizeUrl(embedUrl);
+    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+    if (!res) return null;
     const html = await res.text();
-    const match = html.match(/player\.src\(\{\s*type:\s*['"]video\/mp4['"],\s*src:\s*['"]([^'"]+)['"]/);
-    if (!match) return [];
-    return [{ url: match[1], quality: 'Auto' }];
-}
+
+    // ابحث في عدة أنماط معروفة
+    let match =
+      html.match(/player\.src\(\{\s*type:\s*['"]video\/mp4['"],\s*src:\s*['"]([^'"]+)/) ||
+      html.match(/sources\s*:\s*\[\s*["']([^"']+\.mp4[^"']*)["']/i) ||
+      html.match(/file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i);
+
+    if (match && match[1]) {
+      return [{ url: normalizeUrl(match[1], embedUrl), quality: "Auto" }];
+    }
+
+    // fallback: أي mp4 مباشر في الصفحة
+    const f = html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
+    return f ? [{ url: normalizeUrl(f[0], embedUrl), quality: "Auto" }] : null;
+    }
 
   async function extractDoodstream(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
