@@ -1,10 +1,10 @@
 async function searchResults(keyword) {
   try {
-    const url = `https://4q.4ruhzd.shop/?search_param=animes&s=${encodeURIComponent(keyword)}`;
+    const url = `https://ww.anime4up.rest/?search_param=animes&s=${encodeURIComponent(keyword)}`;
     const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://4q.4ruhzd.shop/'
+        'Referer': 'https://ww.anime4up.rest/'
       }
     });
     const html = await res.text();
@@ -321,15 +321,6 @@ async function extractStreamUrl(url) {
     const match = html.match(/sources:\s*\[\s*["']([^"']+\.mp4[^"']*)["']\s*\]/i) ||
                   html.match(/sources\s*=\s*\[["']([^"']+\.mp4[^"']*)["']\]/i) ||
                   html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
-    return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
-  }
-
-  async function extractYourupload(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: "https://www.yourupload.com/", "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-    const match = html.match(/file:\s*['"]([^'"]+\.mp4[^'"]*)['"]/i) || html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
     return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
   }
 
