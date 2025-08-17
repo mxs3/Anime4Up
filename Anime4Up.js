@@ -146,9 +146,6 @@ async function extractEpisodes(url) {
   }
 }
 
-// -------------------------------
-// Sora-ready extractStreamUrl
-// -------------------------------
 async function extractStreamUrl(url) {
   // ==== Utilities ====
   const hasFetchV2 = typeof fetchv2 === "function";
