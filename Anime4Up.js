@@ -210,7 +210,7 @@ async function extractStreamUrl(url) {
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const html = await res.text();
-    let md5PathMatch = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_\.]+)['"]/i) || html.match(/pass_md5=([a-zA-Z0-9\/\-_\.]+)/i);
+    const md5PathMatch = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_\.]+)['"]/i) || html.match(/pass_md5=([a-zA-Z0-9\/\-_\.]+)/i);
     if (!md5PathMatch) {
       const found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
       return found ? normalizeUrl(found[0], embedUrl) : null;
@@ -339,9 +339,6 @@ async function extractStreamUrl(url) {
           streamUrl: direct,
           headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" },
         });
-      } else {
-        // لو عايز تخلي الكود يعرض برضه السيرفرات الفاشلة، سيب البلوك ده:
-        // streams.push({ title: prov.title + " ❌", streamUrl: prov.rawUrl });
       }
     }
 
