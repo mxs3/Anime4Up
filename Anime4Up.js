@@ -99,38 +99,32 @@ async function extractEpisodes(url) {
       return await res.text();
     };
 
+    // === 1. أول صفحة ===
     const firstHtml = await getPage(url);
 
-    // --- نوع العمل (Movie / Series) ---
+    // نوع (فيلم ولا مسلسل)
     const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
+
     if (type.includes("movie") || type.includes("فيلم")) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
 
-    // --- تعديل pagination ---
-    const paginationRegex = /<a[^>]+href="([^"]+\/page\/\d+\/?)"[^>]*>/gi;
+    // === 2. اجمع كل صفحات الباجينيشن ===
+    const paginationRegex = /<a[^>]+href="([^"]+\/page\/\d+\/?)"[^>]*class="page-numbers"/gi;
+    const pagesSet = new Set();
     let match;
-    let maxPage = 1;
     while ((match = paginationRegex.exec(firstHtml)) !== null) {
-      const pageUrl = match[1];
-      const numMatch = pageUrl.match(/\/page\/(\d+)/i);
-      if (numMatch) {
-        const pageNum = parseInt(numMatch[1], 10);
-        if (pageNum > maxPage) maxPage = pageNum;
-      }
+      pagesSet.add(match[1]);
     }
 
-    // --- نولد كل الصفحات من 1 → max ---
-    const pages = [];
-    for (let i = 1; i <= maxPage; i++) {
-      pages.push(i === 1 ? url : `${url.replace(/\/$/, "")}/page/${i}/`);
-    }
+    const pages = Array.from(pagesSet);
+    pages.push(url); // أضمن إن الصفحة الأساسية موجودة
 
-    // --- نجيب كل الصفحات ---
-    const htmlPages = await Promise.all(pages.map(page => getPage(page)));
+    // === 3. هات كل الصفحات مع بعض ===
+    const htmlPages = await Promise.all(pages.map(p => getPage(p)));
 
-    // --- نجيب الحلقات ---
+    // === 4. اجمع الحلقات من كل صفحة ===
     for (const html of htmlPages) {
       const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
       let epMatch;
@@ -146,9 +140,10 @@ async function extractEpisodes(url) {
       }
     }
 
-    // --- ترتيب الحلقات ---
+    // === 5. الترتيب ===
     results.sort((a, b) => a.number - b.number);
 
+    // === 6. fallback ===
     if (results.length === 0) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
