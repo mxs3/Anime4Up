@@ -155,109 +155,139 @@ async function extractStreamUrl(url) {
   async function httpGet(u, opts = {}) {
     try {
       if (hasFetchV2) {
-        return await fetchv2(u, opts.headers || {}, opts.method || "GET", opts.body || null);
-      } else {
-        return await fetch(u, { method: opts.method || "GET", headers: opts.headers || {}, body: opts.body || null });
+        return await fetchv2(
+          u,
+          opts.headers || {},
+          opts.method || "GET",
+          opts.body || null
+        );
       }
+      return await fetch(u, {
+        method: opts.method || "GET",
+        headers: opts.headers || {},
+        body: opts.body || null,
+      });
     } catch {
       return null;
     }
   }
 
-  function safeTrim(s) {
-    return s ? String(s).trim() : "";
-  }
-
   function normalizeUrl(raw, base = "") {
     if (!raw) return raw;
-    raw = safeTrim(raw);
+    raw = String(raw).trim();
     if (raw.startsWith("//")) return "https:" + raw;
+    if (/^https?:\/\//i.test(raw)) return raw;
     try {
-      return base ? new URL(raw, base).href : raw;
+      return new URL(raw, base || "https://").href;
     } catch {
-      return raw;
+      return raw.startsWith("/")
+        ? "https://" + raw.replace(/^\/+/, "")
+        : "https://" + raw;
     }
   }
 
-  // ==== Extractors (خفيفة) ====
+  // ==== Extractors ====
   async function extractMp4upload(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-    if (html.includes("video you are looking for is not found")) return null;
-
-    let match = html.match(/player\.src\(\{\s*(?:file|src)\s*:\s*["']([^"']+)["']/i);
-    if (match && match[1]) return normalizeUrl(match[1], embedUrl);
-
-    let found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-    return found ? normalizeUrl(found[0], embedUrl) : null;
+    try {
+      const res = await httpGet(embedUrl, {
+        headers: {
+          Referer: embedUrl,
+          "User-Agent": "Mozilla/5.0",
+        },
+      });
+      if (!res) return null;
+      const html = await res.text();
+      let match =
+        html.match(/src:\s*"([^"]+\.mp4)"/) ||
+        html.match(/file:\s*"([^"]+\.mp4)"/) ||
+        html.match(/player\.src\(\{\s*file:\s*"([^"]+\.mp4)"/);
+      return match ? match[1] : null;
+    } catch {
+      return null;
+    }
   }
 
   async function extractUqload(embedUrl) {
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+    embedUrl = normalizeUrl(embedUrl);
+    const res = await httpGet(embedUrl, {
+      headers: {
+        Referer: embedUrl,
+        Origin: "https://uqload.net",
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
     if (!res) return null;
     const html = await res.text();
-    const match = html.match(/https?:\/\/[^"']+\.mp4[^"']*/i);
-    return match ? normalizeUrl(match[0], embedUrl) : null;
-  }
-
-  async function extractYourupload(embedUrl) {
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-    const match = html.match(/file:\s*['"]([^'"]+\.mp4[^'"]*)['"]/i);
-    return match ? normalizeUrl(match[1], embedUrl) : null;
-  }
-
-  async function extractGeneric(embedUrl) {
-    const res = await httpGet(embedUrl, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-    const match = html.match(/https?:\/\/[^"'<>\s]+\.(?:m3u8|mp4)[^"'<>\s]*/i);
-    return match ? normalizeUrl(match[0], embedUrl) : null;
+    const match =
+      html.match(/sources:\s*\[\s*["']([^"']+\.mp4[^"']*)["']/i) ||
+      html.match(/sources\s*=\s*\[["']([^"']+\.mp4[^"']*)["']/i) ||
+      html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
+    return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
   }
 
   // ==== Main ====
   try {
-    const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+    const pageRes = await httpGet(url, {
+      headers: { Referer: url, "User-Agent": "Mozilla/5.0" },
+    });
     if (!pageRes) return JSON.stringify({ streams: [] });
     const pageHtml = await pageRes.text();
 
-    const iframeRe = /<iframe[^>]+src=(?:(['"])(.*?)\1|([^\s>]+))/gi;
+    const anchorRe =
+      /<a\b[^>]*data-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+
+    const blockedKeywords = ["mega", "megamax", "dailymotion"];
     const providers = [];
     const seen = new Set();
 
     let match;
-    while ((match = iframeRe.exec(pageHtml)) !== null) {
+    while ((match = anchorRe.exec(pageHtml)) !== null) {
       const rawUrl = normalizeUrl(match[2] || match[3] || "", url);
+      let title = (match[4] || rawUrl).replace(/\s+/g, " ").trim();
       if (seen.has(rawUrl)) continue;
+      if (
+        blockedKeywords.some(
+          (kw) =>
+            rawUrl.toLowerCase().includes(kw) ||
+            title.toLowerCase().includes(kw)
+        )
+      )
+        continue;
       seen.add(rawUrl);
-      providers.push({ rawUrl });
+      providers.push({ rawUrl, title });
     }
 
-    if (providers.length === 0) return JSON.stringify({ streams: [] });
+    if (!providers.length) return JSON.stringify({ streams: [] });
 
     const streams = [];
     for (const prov of providers) {
       let direct = null;
-      const u = prov.rawUrl.toLowerCase();
+      try {
+        if (/mp4upload\.com/i.test(prov.rawUrl))
+          direct = await extractMp4upload(prov.rawUrl);
+        else if (/uqload/i.test(prov.rawUrl))
+          direct = await extractUqload(prov.rawUrl);
 
-      if (/mp4upload\.com/i.test(u)) {
-        direct = await extractMp4upload(prov.rawUrl);
-      } else if (/uqload/i.test(u)) {
-        direct = await extractUqload(prov.rawUrl);
-      } else if (/yourupload/i.test(u)) {
-        direct = await extractYourupload(prov.rawUrl);
-      } else {
-        direct = await extractGeneric(prov.rawUrl);
-      }
+        // generic fallback
+        if (!direct) {
+          const r = await httpGet(prov.rawUrl, {
+            headers: { Referer: url, "User-Agent": "Mozilla/5.0" },
+          });
+          if (r) {
+            const txt = await r.text();
+            const f = txt.match(
+              /https?:\/\/[^"'<>\s]+\.(?:m3u8|mp4)[^"'<>\s]*/i
+            );
+            if (f && f[0]) direct = normalizeUrl(f[0], prov.rawUrl);
+          }
+        }
+      } catch {}
 
       if (direct) {
         streams.push({
-          title: prov.rawUrl,
+          title: prov.title,
           streamUrl: direct,
-          headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" }
+          headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" },
         });
       }
     }
