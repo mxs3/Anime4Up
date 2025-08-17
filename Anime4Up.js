@@ -226,37 +226,40 @@ async function extractStreamUrl(url) {
 
   // ==== Extractors ====
   async function extractMp4upload(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const page = await res.text();
-
-    // أنماط متعددة للـ file/src
-    let m =
-      page.match(/player\.src\(\{\s*(?:file|src)\s*:\s*['"]([^'"]+)['"]/i) ||
-      page.match(/["']?file["']?\s*:\s*["']([^"']+)["']/i) ||
-      page.match(/sources:\s*\[\s*["']([^"']+)["']/i);
-    if (m && m[1]) return normalizeUrl(m[1], embedUrl);
-
-    // نمط get_video?id
-    m = page.match(/\/get_video\?id=([a-zA-Z0-9]+)/i);
-    if (m && m[1]) {
-      const trial = await httpGet(`https://www.mp4upload.com/get_video?id=${m[1]}`, { headers: { Referer: embedUrl } });
-      if (trial) {
-        const txt = await trial.text();
-        try {
-          const j = JSON.parse(txt);
-          if (j?.file) return normalizeUrl(j.file, embedUrl);
-        } catch {}
+  try {
+    const res = await fetch(embedUrl, {
+      headers: {
+        "Referer": embedUrl,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
       }
+    });
+    const html = await res.text();
+
+    // أول محاولة: صيغة src: "https://....mp4"
+    let match = html.match(/src:\s*"([^"]+\.mp4)"/);
+    if (match && match[1]) {
+      return match[1];
     }
 
-    // fallback عام
-    const direct = page.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
-    if (direct && direct[0]) return normalizeUrl(direct[0], embedUrl);
+    // تاني محاولة: file: "https://....mp4"
+    match = html.match(/file:\s*"([^"]+\.mp4)"/);
+    if (match && match[1]) {
+      return match[1];
+    }
 
+    // تالت محاولة: player.src({ file: "..." })
+    match = html.match(/player\.src\(\{\s*file:\s*"([^"]+\.mp4)"/);
+    if (match && match[1]) {
+      return match[1];
+    }
+
+    console.log("mp4upload extractor: No direct MP4 found");
+    return null;
+  } catch (e) {
+    console.log("mp4upload extractor error:", e);
     return null;
   }
+}
 
   async function extractDoodstream(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
