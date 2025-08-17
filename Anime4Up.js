@@ -110,21 +110,26 @@ async function extractEpisodes(url) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
 
-    // === 2. اجمع كل صفحات الباجينيشن ===
-    const paginationRegex = /<a[^>]+href="([^"]+\/page\/\d+\/?)"[^>]*class="page-numbers"/gi;
-    const pagesSet = new Set();
-    let match;
-    while ((match = paginationRegex.exec(firstHtml)) !== null) {
-      pagesSet.add(match[1]);
+    // === 2. نجيب آخر رقم صفحة ===
+    const lastPageMatch = firstHtml.match(/\/page\/(\d+)\/"><\/a>|\/page\/(\d+)\/">/gi)
+      || firstHtml.match(/page-numbers" href="[^"]+\/page\/(\d+)\/">/gi);
+
+    let maxPage = 1;
+    if (lastPageMatch) {
+      const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
+      maxPage = allNums.length ? Math.max(...allNums) : 1;
     }
 
-    const pages = Array.from(pagesSet);
-    pages.push(url); // أضمن إن الصفحة الأساسية موجودة
+    // === 3. نولّد كل الصفحات 1 → maxPage ===
+    const pages = [];
+    for (let i = 1; i <= maxPage; i++) {
+      pages.push(i === 1 ? url : `${url.replace(/\/$/, "")}/page/${i}/`);
+    }
 
-    // === 3. هات كل الصفحات مع بعض ===
+    // === 4. هات كل الصفحات مرّة واحدة ===
     const htmlPages = await Promise.all(pages.map(p => getPage(p)));
 
-    // === 4. اجمع الحلقات من كل صفحة ===
+    // === 5. استخرج الحلقات ===
     for (const html of htmlPages) {
       const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
       let epMatch;
@@ -140,10 +145,10 @@ async function extractEpisodes(url) {
       }
     }
 
-    // === 5. الترتيب ===
+    // === 6. رتب الحلقات ===
     results.sort((a, b) => a.number - b.number);
 
-    // === 6. fallback ===
+    // === 7. fallback ===
     if (results.length === 0) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
