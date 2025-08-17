@@ -88,48 +88,49 @@ async function extractDetails(url) {
 
 async function extractEpisodes(url) {
   const results = [];
-
-  async function getPage(pageUrl) {
-    const res = await fetchv2(pageUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": url
-      }
-    });
-    return await res.text();
-  }
-
   try {
+    const getPage = async (pageUrl) => {
+      const res = await fetchv2(pageUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Referer": url
+        }
+      });
+      return await res.text();
+    };
+
     const firstHtml = await getPage(url);
 
-    // تحديد النوع (مسلسل / فيلم)
+    // --- نوع العمل (Movie / Series) ---
     const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
     if (type.includes("movie") || type.includes("فيلم")) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
 
-    // استخراج روابط الصفحات
-    const paginationRegex = /<a[^>]+href="([^"]+\/page\/\d+\/?)"[^>]*class="page-numbers"/gi;
-    const pagesSet = new Set();
+    // --- تعديل pagination ---
+    const paginationRegex = /<a[^>]+href="([^"]+\/page\/\d+\/?)"[^>]*>/gi;
     let match;
+    let maxPage = 1;
     while ((match = paginationRegex.exec(firstHtml)) !== null) {
-      pagesSet.add(match[1]);
+      const pageUrl = match[1];
+      const numMatch = pageUrl.match(/\/page\/(\d+)/i);
+      if (numMatch) {
+        const pageNum = parseInt(numMatch[1], 10);
+        if (pageNum > maxPage) maxPage = pageNum;
+      }
     }
 
-    const pages = Array.from(pagesSet);
-    pages.push(url);
-
-    // جلب كل الصفحات في مجموعات صغيرة (batch size = 5)
-    const htmlPages = [];
-    const batchSize = 5;
-    for (let i = 0; i < pages.length; i += batchSize) {
-      const batch = pages.slice(i, i + batchSize);
-      const chunk = await Promise.all(batch.map(page => getPage(page)));
-      htmlPages.push(...chunk);
+    // --- نولد كل الصفحات من 1 → max ---
+    const pages = [];
+    for (let i = 1; i <= maxPage; i++) {
+      pages.push(i === 1 ? url : `${url.replace(/\/$/, "")}/page/${i}/`);
     }
 
-    // استخراج روابط الحلقات
+    // --- نجيب كل الصفحات ---
+    const htmlPages = await Promise.all(pages.map(page => getPage(page)));
+
+    // --- نجيب الحلقات ---
     for (const html of htmlPages) {
       const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
       let epMatch;
@@ -145,6 +146,7 @@ async function extractEpisodes(url) {
       }
     }
 
+    // --- ترتيب الحلقات ---
     results.sort((a, b) => a.number - b.number);
 
     if (results.length === 0) {
