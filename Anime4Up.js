@@ -103,14 +103,14 @@ async function extractEpisodes(url) {
   try {
     const firstHtml = await getPage(url);
 
-    // نوع الأنمي (لو فيلم رجّع حلقة واحدة بس)
+    // لو فيلم، رجّع حلقة واحدة بس
     const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
     if (type.includes("movie") || type.includes("فيلم")) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
 
-    // ==== نجمع الحلقات من الصفحة الأولى ====
+    // دالة استخراج الحلقات من HTML
     const extractFromHtml = (html) => {
       const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
       let epMatch;
@@ -121,15 +121,17 @@ async function extractEpisodes(url) {
       }
     };
 
+    // صفحة 1
     extractFromHtml(firstHtml);
 
-    // ==== نجيب باقي الصفحات ديناميك ====
+    // باقي الصفحات ديناميك (من 2 لحد ما يوقف عند صفحة فاضية)
     let page = 2;
     while (true) {
       const nextUrl = url.replace(/\/$/, "") + `/page/${page}/`;
       const html = await getPage(nextUrl);
 
-      if (!html || !html.includes("episodes-card-title")) break; // وقف لو مفيش حلقات
+      // وقف لو الصفحة فاضية أو مفيهاش حلقات
+      if (!html || !html.includes("episodes-card-title")) break;
 
       extractFromHtml(html);
       page++;
