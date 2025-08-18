@@ -88,60 +88,70 @@ async function extractDetails(url) {
 
 async function extractEpisodes(url) {
   const results = [];
-
-  const getPage = async (pageUrl) => {
-    try {
+  try {
+    const getPage = async (pageUrl) => {
       const res = await fetchv2(pageUrl, {
-        headers: { "User-Agent": "Mozilla/5.0", "Referer": url }
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Referer": url
+        }
       });
       return await res.text();
-    } catch {
-      return "";
-    }
-  };
+    };
 
-  try {
+    // === 1. Ø£ÙÙ ØµÙØ­Ø© ===
     const firstHtml = await getPage(url);
 
-    // لو فيلم، رجّع حلقة واحدة بس
-    const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
+    // ÙÙØ¹ (ÙÙÙÙ ÙÙØ§ ÙØ³ÙØ³Ù)
+    const typeMatch = firstHtml.match(/<div class="anime-info"><span>Ø§ÙÙÙØ¹:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
-    if (type.includes("movie") || type.includes("فيلم")) {
+
+    if (type.includes("movie") || type.includes("ÙÙÙÙ")) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
 
-    // دالة استخراج الحلقات من HTML
-    const extractFromHtml = (html) => {
-      const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
+    // === 2. ÙØ¬ÙØ¨ Ø¢Ø®Ø± Ø±ÙÙ ØµÙØ­Ø© ===
+    let maxPage = 1;
+    const pageNumMatches = [...firstHtml.matchAll(/\/page\/(\d+)\//g)];
+    if (pageNumMatches.length) {
+      const nums = pageNumMatches.map(m => parseInt(m[1], 10));
+      maxPage = Math.max(...nums);
+    }
+
+    // === 3. ÙÙÙÙØ¯ ÙÙ Ø§ÙØµÙØ­Ø§Øª 1 â maxPage ===
+    const pages = [];
+    for (let i = 1; i <= maxPage; i++) {
+      pages.push(i === 1 ? url : `${url.replace(/\/$/, "")}/page/${i}/`);
+    }
+
+    // === 4. ÙØ§Øª ÙÙ Ø§ÙØµÙØ­Ø§Øª ÙØ±ÙØ© ÙØ§Ø­Ø¯Ø© ===
+    const htmlPages = await Promise.all(pages.map(p => getPage(p)));
+
+    // === 5. Ø§Ø³ØªØ®Ø±Ø¬ Ø§ÙØ­ÙÙØ§Øª ===
+    for (const html of htmlPages) {
+      const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*Ø§ÙØ­ÙÙØ©\s*(\d+)[^<]*<\/a>/gi;
       let epMatch;
       while ((epMatch = episodeRegex.exec(html)) !== null) {
         const episodeUrl = epMatch[1].trim();
         const episodeNumber = parseInt(epMatch[2].trim(), 10);
-        if (!isNaN(episodeNumber)) results.push({ href: episodeUrl, number: episodeNumber });
+        if (!isNaN(episodeNumber)) {
+          results.push({
+            href: episodeUrl,
+            number: episodeNumber
+          });
+        }
       }
-    };
-
-    // صفحة 1
-    extractFromHtml(firstHtml);
-
-    // باقي الصفحات ديناميك (من 2 لحد ما يوقف عند صفحة فاضية)
-    let page = 2;
-    while (true) {
-      const nextUrl = url.replace(/\/$/, "") + `/page/${page}/`;
-      const html = await getPage(nextUrl);
-
-      // وقف لو الصفحة فاضية أو مفيهاش حلقات
-      if (!html || !html.includes("episodes-card-title")) break;
-
-      extractFromHtml(html);
-      page++;
     }
 
+    // === 6. Ø±ØªØ¨ Ø§ÙØ­ÙÙØ§Øª ===
     results.sort((a, b) => a.number - b.number);
 
-    if (results.length === 0) return JSON.stringify([{ href: url, number: 1 }]);
-    return JSON.stringify(results);
+    // === 7. fallback ===
+    if (results.length === 0) {
+      return JSON.stringify([{ href: url, number: 1 }]);
+    }
 
+    return JSON.stringify(results);
   } catch {
     return JSON.stringify([{ href: url, number: 1 }]);
   }
