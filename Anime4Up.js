@@ -99,56 +99,56 @@ async function extractEpisodes(url) {
       return await res.text();
     };
 
-    // === 1. أول صفحة ===
+    // === 1. Ø£ÙÙ ØµÙØ­Ø© ===
     const firstHtml = await getPage(url);
 
-    // نوع (فيلم ولا مسلسل)
-    const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
+    // ÙÙØ¹ (ÙÙÙÙ ÙÙØ§ ÙØ³ÙØ³Ù)
+    const typeMatch = firstHtml.match(/<div class="anime-info"><span>Ø§ÙÙÙØ¹:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
 
-    if (type.includes("movie") || type.includes("فيلم")) {
+    if (type.includes("movie") || type.includes("ÙÙÙÙ")) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
 
-    // === 2. نجيب آخر رقم صفحة ===
-    const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
-    const maxPage = allNums.length ? Math.max(...allNums) : 1;
+    // === 2. ÙØ¬ÙØ¨ Ø¢Ø®Ø± Ø±ÙÙ ØµÙØ­Ø© ===
+    const lastPageMatch = firstHtml.match(/\/page\/(\d+)\/"><\/a>|\/page\/(\d+)\/">/gi)
+      || firstHtml.match(/page-numbers" href="[^"]+\/page\/(\d+)\/">/gi);
 
-    // === 3. نولّد كل الصفحات 1 → maxPage ===
+    let maxPage = 1;
+    if (lastPageMatch) {
+      const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
+      maxPage = allNums.length ? Math.max(...allNums) : 1;
+    }
+
+    // === 3. ÙÙÙÙØ¯ ÙÙ Ø§ÙØµÙØ­Ø§Øª 1 â maxPage ===
     const pages = [];
     for (let i = 1; i <= maxPage; i++) {
       pages.push(i === 1 ? url : `${url.replace(/\/$/, "")}/page/${i}/`);
     }
 
-    // === 4. batch fetch (50 صفحة كل مرة) ===
-    const batchSize = 50;
-    for (let i = 0; i < pages.length; i += batchSize) {
-      const batch = pages.slice(i, i + batchSize);
-      const htmlPages = await Promise.all(batch.map(p => getPage(p)));
+    // === 4. ÙØ§Øª ÙÙ Ø§ÙØµÙØ­Ø§Øª ÙØ±ÙØ© ÙØ§Ø­Ø¯Ø© ===
+    const htmlPages = await Promise.all(pages.map(p => getPage(p)));
 
-      for (const html of htmlPages) {
-        const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
-        let epMatch;
-        while ((epMatch = episodeRegex.exec(html)) !== null) {
-          const episodeUrl = epMatch[1].trim();
-          const episodeNumber = parseInt(epMatch[2].trim(), 10);
-          if (!isNaN(episodeNumber)) {
-            results.push({
-              href: episodeUrl,
-              number: episodeNumber
-            });
-          }
+    // === 5. Ø§Ø³ØªØ®Ø±Ø¬ Ø§ÙØ­ÙÙØ§Øª ===
+    for (const html of htmlPages) {
+      const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*Ø§ÙØ­ÙÙØ©\s*(\d+)[^<]*<\/a>/gi;
+      let epMatch;
+      while ((epMatch = episodeRegex.exec(html)) !== null) {
+        const episodeUrl = epMatch[1].trim();
+        const episodeNumber = parseInt(epMatch[2].trim(), 10);
+        if (!isNaN(episodeNumber)) {
+          results.push({
+            href: episodeUrl,
+            number: episodeNumber
+          });
         }
       }
-
-      // optional: delay بسيط بين الدفعات (عشان مايتعملش block)
-      await new Promise(res => setTimeout(res, 500));
     }
 
-    // === 5. رتب الحلقات ===
+    // === 6. Ø±ØªØ¨ Ø§ÙØ­ÙÙØ§Øª ===
     results.sort((a, b) => a.number - b.number);
 
-    // === 6. fallback ===
+    // === 7. fallback ===
     if (results.length === 0) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
