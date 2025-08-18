@@ -196,12 +196,7 @@ async function extractStreamUrl(url) {
   // ==== Extractors ====
   async function extractMp4upload(embedUrl) {
     try {
-      const res = await httpGet(embedUrl, {
-        headers: {
-          Referer: embedUrl,
-          "User-Agent": "Mozilla/5.0",
-        },
-      });
+      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
       if (!res) return null;
       const html = await res.text();
       let match =
@@ -217,11 +212,7 @@ async function extractStreamUrl(url) {
   async function extractUqload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, {
-      headers: {
-        Referer: embedUrl,
-        Origin: "https://uqload.net",
-        "User-Agent": "Mozilla/5.0",
-      },
+      headers: { Referer: embedUrl, Origin: "https://uqload.net", "User-Agent": "Mozilla/5.0" },
     });
     if (!res) return null;
     const html = await res.text();
@@ -232,17 +223,25 @@ async function extractStreamUrl(url) {
     return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
   }
 
+  async function extractDoodStream(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl);
+      if (!res) return null;
+      const html = await res.text();
+      if (!html) return null;
+      return await doodstreamExtractor(html, embedUrl);
+    } catch {
+      return null;
+    }
+  }
+
   // ==== Main ====
   try {
-    const pageRes = await httpGet(url, {
-      headers: { Referer: url, "User-Agent": "Mozilla/5.0" },
-    });
+    const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
     if (!pageRes) return JSON.stringify({ streams: [] });
     const pageHtml = await pageRes.text();
 
-    const anchorRe =
-      /<a\b[^>]*data-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
-
+    const anchorRe = /<a\b[^>]*data-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
     const blockedKeywords = ["mega", "megamax", "dailymotion"];
     const providers = [];
     const seen = new Set();
@@ -252,14 +251,7 @@ async function extractStreamUrl(url) {
       const rawUrl = normalizeUrl(match[2] || match[3] || "", url);
       let title = (match[4] || rawUrl).replace(/\s+/g, " ").trim();
       if (seen.has(rawUrl)) continue;
-      if (
-        blockedKeywords.some(
-          (kw) =>
-            rawUrl.toLowerCase().includes(kw) ||
-            title.toLowerCase().includes(kw)
-        )
-      )
-        continue;
+      if (blockedKeywords.some(kw => rawUrl.toLowerCase().includes(kw) || title.toLowerCase().includes(kw))) continue;
       seen.add(rawUrl);
       providers.push({ rawUrl, title });
     }
@@ -270,33 +262,21 @@ async function extractStreamUrl(url) {
     for (const prov of providers) {
       let direct = null;
       try {
-        if (/mp4upload\.com/i.test(prov.rawUrl))
-          direct = await extractMp4upload(prov.rawUrl);
-        else if (/uqload/i.test(prov.rawUrl))
-          direct = await extractUqload(prov.rawUrl);
+        if (/mp4upload\.com/i.test(prov.rawUrl)) direct = await extractMp4upload(prov.rawUrl);
+        else if (/uqload/i.test(prov.rawUrl)) direct = await extractUqload(prov.rawUrl);
+        else if (/doodstream\.com/i.test(prov.rawUrl)) direct = await extractDoodStream(prov.rawUrl);
 
-        // generic fallback
         if (!direct) {
-          const r = await httpGet(prov.rawUrl, {
-            headers: { Referer: url, "User-Agent": "Mozilla/5.0" },
-          });
+          const r = await httpGet(prov.rawUrl, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
           if (r) {
             const txt = await r.text();
-            const f = txt.match(
-              /https?:\/\/[^"'<>\s]+\.(?:m3u8|mp4)[^"'<>\s]*/i
-            );
+            const f = txt.match(/https?:\/\/[^"'<>\s]+\.(?:m3u8|mp4)[^"'<>\s]*/i);
             if (f && f[0]) direct = normalizeUrl(f[0], prov.rawUrl);
           }
         }
       } catch {}
 
-      if (direct) {
-        streams.push({
-          title: prov.title,
-          streamUrl: direct,
-          headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" },
-        });
-      }
+      if (direct) streams.push({ title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } });
     }
 
     return JSON.stringify({ streams });
@@ -304,6 +284,25 @@ async function extractStreamUrl(url) {
     console.log("extractStreamUrl error:", e);
     return JSON.stringify({ streams: [] });
   }
+}
+
+// ==== DoodStream Extractor + randomStr ====
+async function doodstreamExtractor(html, url = null) {
+  const streamDomain = url.match(/https:\/\/(.*?)\//)[1];
+  const md5Path = html.match(/'\/pass_md5\/(.*?)',/)[1];
+  const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
+  const expiryTimestamp = Date.now();
+  const random = randomStr(10);
+  const passResponse = await fetch(`https://${streamDomain}/pass_md5/${md5Path}`, { headers: { "Referer": url } });
+  const responseData = await passResponse.text();
+  return `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
+}
+
+function randomStr(length) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < length; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+  return result;
 }
 
 function decodeHTMLEntities(text) {
