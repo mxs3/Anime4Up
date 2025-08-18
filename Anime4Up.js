@@ -37,10 +37,8 @@ async function searchResults(keyword) {
 
 async function extractDetails(url) {
   try {
-    const res = await fetchv2(url);
-    const buffer = await res.arrayBuffer();
-    const html = new TextDecoder("utf-8").decode(buffer);
-
+    const response = await fetchv2(url);
+    const html = await response.text();
     let description = "لا يوجد وصف متاح.";
     let airdate = "غير معروف";
     let aliases = "غير مصنف";
