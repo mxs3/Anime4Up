@@ -98,10 +98,9 @@ async function extractEpisodes(url) {
     if (!firstHtml) return JSON.stringify([]);
 
     let results = [];
-    // Regex عام يلقط روابط الحلقات
     const epRegex = /<a[^>]+href="([^"]+)"[^>]*>(?:\s*Episode\s*(\d+)|\s*الحلقة\s*(\d+)|\s*Ep\s*(\d+))?/gi;
 
-    // جلب عدد الصفحات
+    // تحديد أقصى عدد صفحات
     let maxPage = Math.max(1, ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1]));
 
     // تحميل كل الصفحات
@@ -111,7 +110,7 @@ async function extractEpisodes(url) {
       )
     );
 
-    // استخراج الحلقات من كل الصفحات
+    // استخراج الحلقات
     for (const html of pages) {
       let m;
       while ((m = epRegex.exec(html))) {
@@ -123,10 +122,20 @@ async function extractEpisodes(url) {
       }
     }
 
-    // ترتيب الحلقات
-    results.sort((a, b) => a.number - b.number);
+    // إزالة التكرار (حسب الرابط)
+    const unique = [];
+    const seen = new Set();
+    for (const ep of results) {
+      if (!seen.has(ep.href)) {
+        seen.add(ep.href);
+        unique.push(ep);
+      }
+    }
 
-    return JSON.stringify(results);
+    // ترتيب حسب رقم الحلقة
+    unique.sort((a, b) => a.number - b.number);
+
+    return JSON.stringify(unique);
 
   } catch (error) {
     console.log("Fetch error:", error);
