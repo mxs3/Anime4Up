@@ -37,11 +37,13 @@ async function searchResults(keyword) {
 
 async function extractDetails(url) {
   try {
-    const response = await fetchv2(url);
-    const html = await response.text();
-    let description = "ÙØ§ ÙÙØ¬Ø¯ ÙØµÙ ÙØªØ§Ø­.";
-    let airdate = "ØºÙØ± ÙØ¹Ø±ÙÙ";
-    let aliases = "ØºÙØ± ÙØµÙÙ";
+    const res = await fetchv2(url);
+    const buffer = await res.arrayBuffer();
+    const html = new TextDecoder("utf-8").decode(buffer);
+
+    let description = "لا يوجد وصف متاح.";
+    let airdate = "غير معروف";
+    let aliases = "غير مصنف";
 
     const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
     if (descMatch) {
@@ -60,7 +62,7 @@ async function extractDetails(url) {
       }
     }
 
-    const airdateMatch = html.match(/<span>\s*Ø¨Ø¯Ø§ÙØ© Ø§ÙØ¹Ø±Ø¶:\s*<\/span>\s*(\d{4})/i);
+    const airdateMatch = html.match(/<span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
     if (airdateMatch) {
       const extracted = airdateMatch[1].trim();
       if (/^\d{4}$/.test(extracted)) {
@@ -72,15 +74,15 @@ async function extractDetails(url) {
       {
         description,
         aliases,
-        airdate: `Ø³ÙØ© Ø§ÙØ¹Ø±Ø¶: ${airdate}`
+        airdate: `سنة العرض: ${airdate}`
       }
     ]);
   } catch {
     return JSON.stringify([
       {
-        description: "ØªØ¹Ø°Ø± ØªØ­ÙÙÙ Ø§ÙÙØµÙ.",
-        aliases: "ØºÙØ± ÙØµÙÙ",
-        airdate: "Ø³ÙØ© Ø§ÙØ¹Ø±Ø¶: ØºÙØ± ÙØ¹Ø±ÙÙØ©"
+        description: "تعذر تحميل الوصف.",
+        aliases: "غير مصنف",
+        airdate: "سنة العرض: غير معروفة"
       }
     ]);
   }
@@ -88,49 +90,63 @@ async function extractDetails(url) {
 
 async function extractEpisodes(url) {
   const results = [];
-  try {
-    // helper لجلب الصفحة
-    const getPage = async (pageUrl) => {
+
+  const getPage = async (pageUrl) => {
+    try {
       const res = await fetchv2(pageUrl, {
         headers: { "User-Agent": "Mozilla/5.0", "Referer": url }
       });
       return await res.text();
-    };
+    } catch {
+      return "";
+    }
+  };
 
-    // الصفحة الأولى
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  try {
     const firstHtml = await getPage(url);
 
-    // نوع الأنمي (فيلم أو مسلسل)
+    // نوع الأنمي
     const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
     if (type.includes("movie") || type.includes("فيلم")) return JSON.stringify([{ href: url, number: 1 }]);
 
-    // استخرج روابط الصفحات من pagination
+    // روابط الصفحات
     const paginationRegex = /<a[^>]+href="([^"]+\/page\/\d+\/?)"[^>]*class="page-numbers"/gi;
     const pagesSet = new Set();
     let match;
     while ((match = paginationRegex.exec(firstHtml)) !== null) pagesSet.add(match[1]);
-    pagesSet.add(url); // تأكد من إضافة الصفحة الأولى
-    const pages = Array.from(pagesSet);
+    pagesSet.add(url); // الصفحة الأولى
+    const pages = Array.from(pagesSet).sort((a,b) => {
+      const nA = parseInt(a.match(/\/page\/(\d+)\//)?.[1]||0);
+      const nB = parseInt(b.match(/\/page\/(\d+)\//)?.[1]||0);
+      return nA - nB;
+    });
 
-    // جلب كل الصفحات دفعة واحدة
-    const htmlPages = await Promise.all(pages.map(page => getPage(page)));
+    // جلب الصفحات على دفعات صغيرة
+    const batchSize = 5; // كل دفعة 5 صفحات
+    for (let i = 0; i < pages.length; i += batchSize) {
+      const batch = pages.slice(i, i + batchSize);
+      const htmlPages = await Promise.all(batch.map(p => getPage(p)));
 
-    // استخرج الحلقات
-    const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
-    for (const html of htmlPages) {
-      let epMatch;
-      while ((epMatch = episodeRegex.exec(html)) !== null) {
-        const episodeUrl = epMatch[1].trim();
-        const episodeNumber = parseInt(epMatch[2].trim(), 10);
-        if (!isNaN(episodeNumber)) results.push({ href: episodeUrl, number: episodeNumber });
+      // استخراج الحلقات لكل صفحة
+      for (const html of htmlPages) {
+        const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
+        let epMatch;
+        while ((epMatch = episodeRegex.exec(html)) !== null) {
+          const episodeUrl = epMatch[1].trim();
+          const episodeNumber = parseInt(epMatch[2].trim(), 10);
+          if (!isNaN(episodeNumber)) results.push({ href: episodeUrl, number: episodeNumber });
+        }
       }
+
+      // تأخير صغير بين الدفعات لتقليل الضغط
+      if (i + batchSize < pages.length) await sleep(300); // 0.3 ثانية
     }
 
-    // ترتيب الحلقات
     results.sort((a, b) => a.number - b.number);
 
-    // fallback للحلقة الأولى لو مفيش نتائج
     if (results.length === 0) return JSON.stringify([{ href: url, number: 1 }]);
     return JSON.stringify(results);
 
