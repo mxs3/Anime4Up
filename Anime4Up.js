@@ -111,13 +111,11 @@ async function extractEpisodes(url) {
     }
 
     // === 2. نجيب آخر رقم صفحة ===
-    const lastPageMatch = firstHtml.match(/\/page\/(\d+)\/"><\/a>|\/page\/(\d+)\/">/gi)
-      || firstHtml.match(/page-numbers" href="[^"]+\/page\/(\d+)\/">/gi);
-
     let maxPage = 1;
-    if (lastPageMatch) {
-      const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
-      maxPage = allNums.length ? Math.max(...allNums) : 1;
+    const pageNumMatches = [...firstHtml.matchAll(/\/page\/(\d+)\//g)];
+    if (pageNumMatches.length) {
+      const nums = pageNumMatches.map(m => parseInt(m[1], 10));
+      maxPage = Math.max(...nums);
     }
 
     // === 3. نولّد كل الصفحات 1 → maxPage ===
