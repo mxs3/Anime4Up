@@ -1,57 +1,13 @@
-// ---------------- Helpers ----------------
-function defaultHeaders(referer) {
-  return {
-    "User-Agent": "Mozilla/5.0",
-    Referer: referer || "https://ww.anime4up.rest/"
-  };
-}
-
-function decodeHTMLEntities(text) {
-  const entities = {
-    '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"',
-    '&#039;': "'", '&apos;': "'", '&nbsp;': ' ', '&#39;': "'"
-  };
-  return text.replace(/&[a-zA-Z0-9#]+;/g, m => entities[m] || m);
-}
-
-function normalizeUrl(raw, base = "") {
-  if (!raw) return raw;
-  raw = String(raw).trim();
-  if (raw.startsWith("//")) return "https:" + raw;
-  if (/^https?:\/\//i.test(raw)) return raw;
-  try {
-    return new URL(raw, base || "https://").href;
-  } catch {
-    return raw.startsWith("/") ? "https://" + raw.replace(/^\/+/, "") : "https://" + raw;
-  }
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function httpGet(url, opts = {}) {
-  try {
-    const headers = { ...defaultHeaders(url), ...(opts.headers || {}) };
-    if (typeof fetchv2 === "function") {
-      return await fetchv2(url, headers, opts.method || "GET", opts.body || null);
-    }
-    return await fetch(url, {
-      method: opts.method || "GET",
-      headers,
-      body: opts.body || null
-    });
-  } catch {
-    return null;
-  }
-}
-
-// ---------------- Search Results ----------------
 async function searchResults(keyword) {
   try {
     const url = `https://ww.anime4up.rest/?search_param=animes&s=${encodeURIComponent(keyword)}`;
-    const html = await (await httpGet(url))?.text();
-    if (!html) throw new Error("No response");
+    const res = await fetchv2(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://ww.anime4up.rest/'
+      }
+    });
+    const html = await res.text();
 
     const results = [];
     const blocks = html.split('anime-card-container');
@@ -59,6 +15,7 @@ async function searchResults(keyword) {
       const hrefMatch = block.match(/<a href="([^"]+\/anime\/[^"]+)"/);
       const imgMatch = block.match(/<img[^>]+src="([^"]+)"[^>]*>/);
       const titleMatch = block.match(/anime-card-title[^>]*>\s*<h3>\s*<a[^>]*>([^<]+)<\/a>/);
+
       if (hrefMatch && imgMatch && titleMatch) {
         results.push({
           title: decodeHTMLEntities(titleMatch[1]),
@@ -68,65 +25,100 @@ async function searchResults(keyword) {
       }
     }
 
-    return JSON.stringify(results.length ? results : [{ title: 'No results found', href: '', image: '' }]);
+    if (results.length === 0) {
+      return JSON.stringify([{ title: 'No results found', href: '', image: '' }]);
+    }
+
+    return JSON.stringify(results);
   } catch (err) {
     return JSON.stringify([{ title: 'Error', href: '', image: '', error: err.message }]);
   }
 }
 
-// ---------------- Anime Details ----------------
 async function extractDetails(url) {
   try {
-    const html = await (await httpGet(url))?.text();
-    if (!html) throw new Error("No response");
-
-    let description = "لا يوجد وصف متاح.";
-    let airdate = "غير معروف";
-    let aliases = "غير مصنف";
+    const response = await fetchv2(url);
+    const html = await response.text();
+    let description = "ÙØ§ ÙÙØ¬Ø¯ ÙØµÙ ÙØªØ§Ø­.";
+    let airdate = "ØºÙØ± ÙØ¹Ø±ÙÙ";
+    let aliases = "ØºÙØ± ÙØµÙÙ";
 
     const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
-    if (descMatch && descMatch[1].trim()) description = decodeHTMLEntities(descMatch[1].trim());
+    if (descMatch) {
+      const rawDescription = descMatch[1].trim();
+      if (rawDescription.length > 0) {
+        description = decodeHTMLEntities(rawDescription);
+      }
+    }
 
     const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
     if (genresMatch) {
-      const genres = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)].map(m => decodeHTMLEntities(m[1].trim()));
-      if (genres.length) aliases = genres.join(", ");
+      const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
+      const genres = genreItems.map(m => decodeHTMLEntities(m[1].trim()));
+      if (genres.length > 0) {
+        aliases = genres.join(", ");
+      }
     }
 
-    const airdateMatch = html.match(/<span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
-    if (airdateMatch && /^\d{4}$/.test(airdateMatch[1].trim())) airdate = airdateMatch[1].trim();
+    const airdateMatch = html.match(/<span>\s*Ø¨Ø¯Ø§ÙØ© Ø§ÙØ¹Ø±Ø¶:\s*<\/span>\s*(\d{4})/i);
+    if (airdateMatch) {
+      const extracted = airdateMatch[1].trim();
+      if (/^\d{4}$/.test(extracted)) {
+        airdate = extracted;
+      }
+    }
 
-    return JSON.stringify([{ description, aliases, airdate: `سنة العرض: ${airdate}` }]);
+    return JSON.stringify([
+      {
+        description,
+        aliases,
+        airdate: `Ø³ÙØ© Ø§ÙØ¹Ø±Ø¶: ${airdate}`
+      }
+    ]);
   } catch {
-    return JSON.stringify([{ description: "تعذر تحميل الوصف.", aliases: "غير مصنف", airdate: "سنة العرض: غير معروفة" }]);
+    return JSON.stringify([
+      {
+        description: "ØªØ¹Ø°Ø± ØªØ­ÙÙÙ Ø§ÙÙØµÙ.",
+        aliases: "ØºÙØ± ÙØµÙÙ",
+        airdate: "Ø³ÙØ© Ø§ÙØ¹Ø±Ø¶: ØºÙØ± ÙØ¹Ø±ÙÙØ©"
+      }
+    ]);
   }
 }
 
-// ---------------- Episodes (محسنة) ----------------
 async function extractEpisodes(url) {
   const results = [];
   try {
-    const getPage = async (pageUrl) => (await httpGet(pageUrl))?.text();
-    const firstHtml = await getPage(url);
-    if (!firstHtml) throw new Error("No response");
+    // helper لجلب الصفحة
+    const getPage = async (pageUrl) => {
+      const res = await fetchv2(pageUrl, {
+        headers: { "User-Agent": "Mozilla/5.0", "Referer": url }
+      });
+      return await res.text();
+    };
 
+    // الصفحة الأولى
+    const firstHtml = await getPage(url);
+
+    // نوع الأنمي (فيلم أو مسلسل)
     const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
-    if (/movie|فيلم/i.test(type)) return JSON.stringify([{ href: url, number: 1 }]);
+    if (type.includes("movie") || type.includes("فيلم")) return JSON.stringify([{ href: url, number: 1 }]);
 
-    let maxPage = 1;
-    const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
-    if (allNums.length) maxPage = Math.max(...allNums);
+    // استخرج روابط الصفحات من pagination
+    const paginationRegex = /<a[^>]+href="([^"]+\/page\/\d+\/?)"[^>]*class="page-numbers"/gi;
+    const pagesSet = new Set();
+    let match;
+    while ((match = paginationRegex.exec(firstHtml)) !== null) pagesSet.add(match[1]);
+    pagesSet.add(url); // تأكد من إضافة الصفحة الأولى
+    const pages = Array.from(pagesSet);
 
-    const pages = Array.from({ length: maxPage }, (_, i) => i === 0 ? url : `${url.replace(/\/$/, "")}/page/${i+1}/`);
-    const htmlPages = [];
-    for (let i = 0; i < pages.length; i++) {
-      htmlPages.push(await getPage(pages[i]));
-      if (i % 5 === 0) await sleep(500);
-    }
+    // جلب كل الصفحات دفعة واحدة
+    const htmlPages = await Promise.all(pages.map(page => getPage(page)));
 
+    // استخرج الحلقات
+    const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
     for (const html of htmlPages) {
-      const episodeRegex = /<a\s+href="([^"]+)">[^<]*\s*(?:الحلقة)?\s*(\d+)[^<]*<\/a>/gi;
       let epMatch;
       while ((epMatch = episodeRegex.exec(html)) !== null) {
         const episodeUrl = epMatch[1].trim();
@@ -135,15 +127,21 @@ async function extractEpisodes(url) {
       }
     }
 
+    // ترتيب الحلقات
     results.sort((a, b) => a.number - b.number);
-    return JSON.stringify(results.length ? results : [{ href: url, number: 1 }]);
-  } catch (err) {
-    console.log("extractEpisodes error:", err);
+
+    // fallback للحلقة الأولى لو مفيش نتائج
+    if (results.length === 0) return JSON.stringify([{ href: url, number: 1 }]);
+    return JSON.stringify(results);
+
+  } catch {
     return JSON.stringify([{ href: url, number: 1 }]);
   }
 }
 
-// ---------------- Stream Extraction (تمام كما أرسلته) ----------------
+// -------------------------------
+// Sora-ready extractStreamUrl
+// -------------------------------
 async function extractStreamUrl(url) {
   // ==== Utilities ====
   const hasFetchV2 = typeof fetchv2 === "function";
@@ -263,6 +261,7 @@ async function extractStreamUrl(url) {
         else if (/uqload/i.test(prov.rawUrl))
           direct = await extractUqload(prov.rawUrl);
 
+        // generic fallback
         if (!direct) {
           const r = await httpGet(prov.rawUrl, {
             headers: { Referer: url, "User-Agent": "Mozilla/5.0" },
@@ -291,4 +290,18 @@ async function extractStreamUrl(url) {
     console.log("extractStreamUrl error:", e);
     return JSON.stringify({ streams: [] });
   }
+}
+
+function decodeHTMLEntities(text) {
+  const entities = {
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&#039;': "'",
+    '&apos;': "'",
+    '&nbsp;': ' ',
+    '&#39;': "'"
+  };
+  return text.replace(/&[a-zA-Z0-9#]+;/g, match => entities[match] || match);
 }
