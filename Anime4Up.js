@@ -87,6 +87,11 @@ async function extractDetails(url) {
 }
 
 async function extractEpisodes(url) {
+  // sleep helper جوه نفس الدالة
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   const results = [];
   try {
     const getPage = async (pageUrl) => {
@@ -102,7 +107,7 @@ async function extractEpisodes(url) {
     // === 1. أول صفحة ===
     const firstHtml = await getPage(url);
 
-    // نوع (فيلم ولا مسلسل)
+    // === 2. نوع (فيلم ولا مسلسل) ===
     const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
 
@@ -110,22 +115,31 @@ async function extractEpisodes(url) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
 
-    // === 2. نجيب آخر رقم صفحة ===
+    // === 3. نجيب آخر رقم صفحة ===
     let maxPage = 1;
-    const pageNumMatches = [...firstHtml.matchAll(/\/page\/(\d+)\//g)];
-    if (pageNumMatches.length) {
-      const nums = pageNumMatches.map(m => parseInt(m[1], 10));
-      maxPage = Math.max(...nums);
+    const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
+    if (allNums.length) {
+      maxPage = Math.max(...allNums);
     }
 
-    // === 3. نولّد كل الصفحات 1 → maxPage ===
+    // === 4. نولّد كل الصفحات 1 → maxPage ===
     const pages = [];
     for (let i = 1; i <= maxPage; i++) {
       pages.push(i === 1 ? url : `${url.replace(/\/$/, "")}/page/${i}/`);
     }
 
-    // === 4. هات كل الصفحات مرّة واحدة ===
-    const htmlPages = await Promise.all(pages.map(p => getPage(p)));
+    let htmlPages = [];
+
+    if (maxPage <= 10) {
+      // قليل → نجيب كله مره واحدة
+      htmlPages = await Promise.all(pages.map(p => getPage(p)));
+    } else {
+      // كتير → نجيب على دفعات صغيرة مع delay
+      for (let i = 0; i < pages.length; i++) {
+        htmlPages.push(await getPage(pages[i]));
+        if (i % 5 === 0) await sleep(500); // كل 5 صفحات استنى نص ثانية
+      }
+    }
 
     // === 5. استخرج الحلقات ===
     for (const html of htmlPages) {
@@ -152,7 +166,8 @@ async function extractEpisodes(url) {
     }
 
     return JSON.stringify(results);
-  } catch {
+  } catch (err) {
+    console.log("extractEpisodes error:", err);
     return JSON.stringify([{ href: url, number: 1 }]);
   }
 }
