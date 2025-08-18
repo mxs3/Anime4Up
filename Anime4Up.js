@@ -98,30 +98,34 @@ async function extractEpisodes(url) {
     if (!firstHtml) return JSON.stringify([]);
 
     let results = [];
-    const epRegex = /<a[^>]+href="([^"]+)"[^>]*class="[^"]*?episode[^"]*?"[^>]*>\s*<span[^>]*>\s*Episode\s*(\d+)/gi;
+    // Regex عام يلقط روابط الحلقات
+    const epRegex = /<a[^>]+href="([^"]+)"[^>]*>(?:\s*Episode\s*(\d+)|\s*الحلقة\s*(\d+)|\s*Ep\s*(\d+))?/gi;
 
-    // === تحديد عدد الصفحات ===
+    // جلب عدد الصفحات
     let maxPage = Math.max(1, ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1]));
 
-    // === تحميل كل الصفحات ===
+    // تحميل كل الصفحات
     const pages = await Promise.all(
       Array.from({ length: maxPage }, (_, i) =>
         getPage(i ? `${url.replace(/\/$/, "")}/page/${i + 1}/` : url)
       )
     );
 
-    // === استخراج الحلقات من كل الصفحات ===
+    // استخراج الحلقات من كل الصفحات
     for (const html of pages) {
       let m;
       while ((m = epRegex.exec(html))) {
-        results.push({ href: m[1].trim(), number: +m[2] });
+        let num = m[2] || m[3] || m[4] || null;
+        results.push({
+          href: m[1].trim(),
+          number: num ? +num : results.length + 1
+        });
       }
     }
 
-    // === ترتيب الحلقات ===
+    // ترتيب الحلقات
     results.sort((a, b) => a.number - b.number);
 
-    // === إرجاع النتيجة بنفس ستايل سورا ===
     return JSON.stringify(results);
 
   } catch (error) {
