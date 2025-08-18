@@ -1,3 +1,51 @@
+// ---------------- Helpers ----------------
+function defaultHeaders(referer) {
+  return {
+    "User-Agent": "Mozilla/5.0",
+    Referer: referer || "https://ww.anime4up.rest/"
+  };
+}
+
+function decodeHTMLEntities(text) {
+  const entities = {
+    '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"',
+    '&#039;': "'", '&apos;': "'", '&nbsp;': ' ', '&#39;': "'"
+  };
+  return text.replace(/&[a-zA-Z0-9#]+;/g, m => entities[m] || m);
+}
+
+function normalizeUrl(raw, base = "") {
+  if (!raw) return raw;
+  raw = String(raw).trim();
+  if (raw.startsWith("//")) return "https:" + raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  try {
+    return new URL(raw, base || "https://").href;
+  } catch {
+    return raw.startsWith("/") ? "https://" + raw.replace(/^\/+/, "") : "https://" + raw;
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function httpGet(url, opts = {}) {
+  try {
+    const headers = { ...defaultHeaders(url), ...(opts.headers || {}) };
+    if (typeof fetchv2 === "function") {
+      return await fetchv2(url, headers, opts.method || "GET", opts.body || null);
+    }
+    return await fetch(url, {
+      method: opts.method || "GET",
+      headers,
+      body: opts.body || null
+    });
+  } catch {
+    return null;
+  }
+}
+
 // ---------------- Search Results ----------------
 async function searchResults(keyword) {
   try {
@@ -54,7 +102,7 @@ async function extractDetails(url) {
   }
 }
 
-// ---------------- Episodes ----------------
+// ---------------- Episodes (محسنة) ----------------
 async function extractEpisodes(url) {
   const results = [];
   try {
@@ -64,7 +112,7 @@ async function extractEpisodes(url) {
 
     const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
     const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
-    if (type.includes("movie") || type.includes("فيلم")) return JSON.stringify([{ href: url, number: 1 }]);
+    if (/movie|فيلم/i.test(type)) return JSON.stringify([{ href: url, number: 1 }]);
 
     let maxPage = 1;
     const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
@@ -78,7 +126,7 @@ async function extractEpisodes(url) {
     }
 
     for (const html of htmlPages) {
-      const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
+      const episodeRegex = /<a\s+href="([^"]+)">[^<]*\s*(?:الحلقة)?\s*(\d+)[^<]*<\/a>/gi;
       let epMatch;
       while ((epMatch = episodeRegex.exec(html)) !== null) {
         const episodeUrl = epMatch[1].trim();
@@ -95,50 +143,152 @@ async function extractEpisodes(url) {
   }
 }
 
-// ---------------- Helpers (Sora-ready) ----------------
-async function httpGet(url, opts = {}) {
-  try {
-    const headers = { ...defaultHeaders(url), ...(opts.headers || {}) };
-    if (typeof fetchv2 === "function") {
-      return await fetchv2(url, headers, opts.method || "GET", opts.body || null);
+// ---------------- Stream Extraction (تمام كما أرسلته) ----------------
+async function extractStreamUrl(url) {
+  // ==== Utilities ====
+  const hasFetchV2 = typeof fetchv2 === "function";
+  async function httpGet(u, opts = {}) {
+    try {
+      if (hasFetchV2) {
+        return await fetchv2(
+          u,
+          opts.headers || {},
+          opts.method || "GET",
+          opts.body || null
+        );
+      }
+      return await fetch(u, {
+        method: opts.method || "GET",
+        headers: opts.headers || {},
+        body: opts.body || null,
+      });
+    } catch {
+      return null;
     }
-    return await fetch(url, {
-      method: opts.method || "GET",
-      headers,
-      body: opts.body || null
-    });
-  } catch {
-    return null;
   }
-}
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+  function normalizeUrl(raw, base = "") {
+    if (!raw) return raw;
+    raw = String(raw).trim();
+    if (raw.startsWith("//")) return "https:" + raw;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    try {
+      return new URL(raw, base || "https://").href;
+    } catch {
+      return raw.startsWith("/")
+        ? "https://" + raw.replace(/^\/+/, "")
+        : "https://" + raw;
+    }
+  }
 
-function defaultHeaders(referer) {
-  return {
-    "User-Agent": "Mozilla/5.0",
-    Referer: referer || "https://ww.anime4up.rest/"
-  };
-}
+  // ==== Extractors ====
+  async function extractMp4upload(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, {
+        headers: {
+          Referer: embedUrl,
+          "User-Agent": "Mozilla/5.0",
+        },
+      });
+      if (!res) return null;
+      const html = await res.text();
+      let match =
+        html.match(/src:\s*"([^"]+\.mp4)"/) ||
+        html.match(/file:\s*"([^"]+\.mp4)"/) ||
+        html.match(/player\.src\(\{\s*file:\s*"([^"]+\.mp4)"/);
+      return match ? match[1] : null;
+    } catch {
+      return null;
+    }
+  }
 
-function decodeHTMLEntities(text) {
-  const entities = {
-    '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"',
-    '&#039;': "'", '&apos;': "'", '&nbsp;': ' ', '&#39;': "'"
-  };
-  return text.replace(/&[a-zA-Z0-9#]+;/g, m => entities[m] || m);
-}
+  async function extractUqload(embedUrl) {
+    embedUrl = normalizeUrl(embedUrl);
+    const res = await httpGet(embedUrl, {
+      headers: {
+        Referer: embedUrl,
+        Origin: "https://uqload.net",
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+    if (!res) return null;
+    const html = await res.text();
+    const match =
+      html.match(/sources:\s*\[\s*["']([^"']+\.mp4[^"']*)["']/i) ||
+      html.match(/sources\s*=\s*\[["']([^"']+\.mp4[^"']*)["']/i) ||
+      html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
+    return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
+  }
 
-function normalizeUrl(raw, base = "") {
-  if (!raw) return raw;
-  raw = String(raw).trim();
-  if (raw.startsWith("//")) return "https:" + raw;
-  if (/^https?:\/\//i.test(raw)) return raw;
+  // ==== Main ====
   try {
-    return new URL(raw, base || "https://").href;
-  } catch {
-    return raw.startsWith("/") ? "https://" + raw.replace(/^\/+/, "") : "https://" + raw;
+    const pageRes = await httpGet(url, {
+      headers: { Referer: url, "User-Agent": "Mozilla/5.0" },
+    });
+    if (!pageRes) return JSON.stringify({ streams: [] });
+    const pageHtml = await pageRes.text();
+
+    const anchorRe =
+      /<a\b[^>]*data-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+
+    const blockedKeywords = ["mega", "megamax", "dailymotion"];
+    const providers = [];
+    const seen = new Set();
+
+    let match;
+    while ((match = anchorRe.exec(pageHtml)) !== null) {
+      const rawUrl = normalizeUrl(match[2] || match[3] || "", url);
+      let title = (match[4] || rawUrl).replace(/\s+/g, " ").trim();
+      if (seen.has(rawUrl)) continue;
+      if (
+        blockedKeywords.some(
+          (kw) =>
+            rawUrl.toLowerCase().includes(kw) ||
+            title.toLowerCase().includes(kw)
+        )
+      )
+        continue;
+      seen.add(rawUrl);
+      providers.push({ rawUrl, title });
+    }
+
+    if (!providers.length) return JSON.stringify({ streams: [] });
+
+    const streams = [];
+    for (const prov of providers) {
+      let direct = null;
+      try {
+        if (/mp4upload\.com/i.test(prov.rawUrl))
+          direct = await extractMp4upload(prov.rawUrl);
+        else if (/uqload/i.test(prov.rawUrl))
+          direct = await extractUqload(prov.rawUrl);
+
+        if (!direct) {
+          const r = await httpGet(prov.rawUrl, {
+            headers: { Referer: url, "User-Agent": "Mozilla/5.0" },
+          });
+          if (r) {
+            const txt = await r.text();
+            const f = txt.match(
+              /https?:\/\/[^"'<>\s]+\.(?:m3u8|mp4)[^"'<>\s]*/i
+            );
+            if (f && f[0]) direct = normalizeUrl(f[0], prov.rawUrl);
+          }
+        }
+      } catch {}
+
+      if (direct) {
+        streams.push({
+          title: prov.title,
+          streamUrl: direct,
+          headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" },
+        });
+      }
+    }
+
+    return JSON.stringify({ streams });
+  } catch (e) {
+    console.log("extractStreamUrl error:", e);
+    return JSON.stringify({ streams: [] });
   }
 }
