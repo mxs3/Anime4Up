@@ -216,7 +216,10 @@ async function extractStreamUrl(url) {
   async function extractMp4upload(embedUrl) {
     try {
       const res = await httpGet(embedUrl, {
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
+        headers: {
+          Referer: embedUrl,
+          "User-Agent": "Mozilla/5.0",
+        },
       });
       if (!res) return null;
       const html = await res.text();
@@ -246,46 +249,6 @@ async function extractStreamUrl(url) {
       html.match(/sources\s*=\s*\[["']([^"']+\.mp4[^"']*)["']/i) ||
       html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
     return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
-  }
-
-  async function extractDoodstream(embedUrl) {
-    try {
-      const res = await httpGet(embedUrl, {
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
-      });
-      if (!res) return null;
-      const html = await res.text();
-
-      const domainMatch = embedUrl.match(/https?:\/\/([^/]+)/i);
-      const md5Match = html.match(/'\/pass_md5\/([^']+)'/);
-
-      if (!domainMatch || !md5Match) return null;
-
-      const streamDomain = domainMatch[1];
-      const md5Path = md5Match[1];
-      const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
-      const expiryTimestamp = Date.now();
-      const random = randomStr(10);
-
-      const passRes = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, {
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
-      });
-      if (!passRes) return null;
-      const responseData = await passRes.text();
-      const videoUrl = `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
-      return videoUrl;
-    } catch {
-      return null;
-    }
-  }
-
-  function randomStr(length) {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let result = "";
-    for (let i = 0; i < length; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
   }
 
   // ==== Main ====
@@ -330,8 +293,6 @@ async function extractStreamUrl(url) {
           direct = await extractMp4upload(prov.rawUrl);
         else if (/uqload/i.test(prov.rawUrl))
           direct = await extractUqload(prov.rawUrl);
-        else if (/dood\.(so|watch|stream|to|cx|la|pm)/i.test(prov.rawUrl))
-          direct = await extractDoodstream(prov.rawUrl);
 
         // generic fallback
         if (!direct) {
