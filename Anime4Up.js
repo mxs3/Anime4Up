@@ -111,14 +111,8 @@ async function extractEpisodes(url) {
     }
 
     // === 2. نجيب آخر رقم صفحة ===
-    const lastPageMatch = firstHtml.match(/\/page\/(\d+)\/"><\/a>|\/page\/(\d+)\/">/gi)
-      || firstHtml.match(/page-numbers" href="[^"]+\/page\/(\d+)\/">/gi);
-
-    let maxPage = 1;
-    if (lastPageMatch) {
-      const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
-      maxPage = allNums.length ? Math.max(...allNums) : 1;
-    }
+    const allNums = [...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1], 10));
+    const maxPage = allNums.length ? Math.max(...allNums) : 1;
 
     // === 3. نولّد كل الصفحات 1 → maxPage ===
     const pages = [];
@@ -126,29 +120,35 @@ async function extractEpisodes(url) {
       pages.push(i === 1 ? url : `${url.replace(/\/$/, "")}/page/${i}/`);
     }
 
-    // === 4. هات كل الصفحات مرّة واحدة ===
-    const htmlPages = await Promise.all(pages.map(p => getPage(p)));
+    // === 4. batch fetch (50 صفحة كل مرة) ===
+    const batchSize = 50;
+    for (let i = 0; i < pages.length; i += batchSize) {
+      const batch = pages.slice(i, i + batchSize);
+      const htmlPages = await Promise.all(batch.map(p => getPage(p)));
 
-    // === 5. استخرج الحلقات ===
-    for (const html of htmlPages) {
-      const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
-      let epMatch;
-      while ((epMatch = episodeRegex.exec(html)) !== null) {
-        const episodeUrl = epMatch[1].trim();
-        const episodeNumber = parseInt(epMatch[2].trim(), 10);
-        if (!isNaN(episodeNumber)) {
-          results.push({
-            href: episodeUrl,
-            number: episodeNumber
-          });
+      for (const html of htmlPages) {
+        const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
+        let epMatch;
+        while ((epMatch = episodeRegex.exec(html)) !== null) {
+          const episodeUrl = epMatch[1].trim();
+          const episodeNumber = parseInt(epMatch[2].trim(), 10);
+          if (!isNaN(episodeNumber)) {
+            results.push({
+              href: episodeUrl,
+              number: episodeNumber
+            });
+          }
         }
       }
+
+      // optional: delay بسيط بين الدفعات (عشان مايتعملش block)
+      await new Promise(res => setTimeout(res, 500));
     }
 
-    // === 6. رتب الحلقات ===
+    // === 5. رتب الحلقات ===
     results.sort((a, b) => a.number - b.number);
 
-    // === 7. fallback ===
+    // === 6. fallback ===
     if (results.length === 0) {
       return JSON.stringify([{ href: url, number: 1 }]);
     }
