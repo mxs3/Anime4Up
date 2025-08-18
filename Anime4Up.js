@@ -223,6 +223,7 @@ async function extractStreamUrl(url) {
     return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
   }
 
+  // ==== DoodStream بعد Uqload ====
   async function extractDoodStream(embedUrl) {
     try {
       const res = await httpGet(embedUrl);
