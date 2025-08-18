@@ -161,22 +161,9 @@ async function extractStreamUrl(url) {
   const hasFetchV2 = typeof fetchv2 === "function";
   async function httpGet(u, opts = {}) {
     try {
-      if (hasFetchV2) {
-        return await fetchv2(
-          u,
-          opts.headers || {},
-          opts.method || "GET",
-          opts.body || null
-        );
-      }
-      return await fetch(u, {
-        method: opts.method || "GET",
-        headers: opts.headers || {},
-        body: opts.body || null,
-      });
-    } catch {
-      return null;
-    }
+      if (hasFetchV2) return await fetchv2(u, opts.headers || {}, opts.method || "GET", opts.body || null);
+      return await fetch(u, { method: opts.method || "GET", headers: opts.headers || {}, body: opts.body || null });
+    } catch { return null; }
   }
 
   function normalizeUrl(raw, base = "") {
@@ -184,13 +171,7 @@ async function extractStreamUrl(url) {
     raw = String(raw).trim();
     if (raw.startsWith("//")) return "https:" + raw;
     if (/^https?:\/\//i.test(raw)) return raw;
-    try {
-      return new URL(raw, base || "https://").href;
-    } catch {
-      return raw.startsWith("/")
-        ? "https://" + raw.replace(/^\/+/, "")
-        : "https://" + raw;
-    }
+    try { return new URL(raw, base || "https://").href; } catch { return raw.startsWith("/") ? "https://" + raw.replace(/^\/+/, "") : "https://" + raw; }
   }
 
   // ==== Extractors ====
@@ -199,41 +180,43 @@ async function extractStreamUrl(url) {
       const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
       if (!res) return null;
       const html = await res.text();
-      let match =
-        html.match(/src:\s*"([^"]+\.mp4)"/) ||
-        html.match(/file:\s*"([^"]+\.mp4)"/) ||
-        html.match(/player\.src\(\{\s*file:\s*"([^"]+\.mp4)"/);
+      const match = html.match(/src:\s*"([^"]+\.mp4)"/) || html.match(/file:\s*"([^"]+\.mp4)"/) || html.match(/player\.src\(\{\s*file:\s*"([^"]+\.mp4)"/);
       return match ? match[1] : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   async function extractUqload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, {
-      headers: { Referer: embedUrl, Origin: "https://uqload.net", "User-Agent": "Mozilla/5.0" },
-    });
+    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, Origin: "https://uqload.net", "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const html = await res.text();
-    const match =
-      html.match(/sources:\s*\[\s*["']([^"']+\.mp4[^"']*)["']/i) ||
-      html.match(/sources\s*=\s*\[["']([^"']+\.mp4[^"']*)["']/i) ||
-      html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
+    const match = html.match(/sources:\s*\[\s*["']([^"']+\.mp4[^"']*)["']/i) || html.match(/sources\s*=\s*\[["']([^"']+\.mp4[^"']*)["']/i) || html.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
     return match ? normalizeUrl(match[1] || match[0], embedUrl) : null;
   }
 
-  // ==== DoodStream بعد Uqload ====
   async function extractDoodStream(embedUrl) {
     try {
       const res = await httpGet(embedUrl);
       if (!res) return null;
       const html = await res.text();
       if (!html) return null;
-      return await doodstreamExtractor(html, embedUrl);
-    } catch {
-      return null;
-    }
+
+      // ==== DoodStream extraction inline ====
+      const streamDomain = embedUrl.match(/https:\/\/(.*?)\//)[1];
+      const md5Path = html.match(/'\/pass_md5\/(.*?)',/)[1];
+      const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
+      const expiryTimestamp = Date.now();
+      const random = (() => {
+        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let str = "";
+        for (let i = 0; i < 10; i++) str += chars.charAt(Math.floor(Math.random() * chars.length));
+        return str;
+      })();
+
+      const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, { headers: { Referer: embedUrl } });
+      const responseData = await passResponse.text();
+      return `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
+    } catch { return null; }
   }
 
   // ==== Main ====
@@ -259,8 +242,8 @@ async function extractStreamUrl(url) {
 
     if (!providers.length) return JSON.stringify({ streams: [] });
 
-    const streams = [];
-    for (const prov of providers) {
+    // ==== Execute all extractors in parallel ====
+    const streams = await Promise.all(providers.map(async (prov) => {
       let direct = null;
       try {
         if (/mp4upload\.com/i.test(prov.rawUrl)) direct = await extractMp4upload(prov.rawUrl);
@@ -276,34 +259,14 @@ async function extractStreamUrl(url) {
           }
         }
       } catch {}
+      return direct ? { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } } : null;
+    }));
 
-      if (direct) streams.push({ title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } });
-    }
-
-    return JSON.stringify({ streams });
+    return JSON.stringify({ streams: streams.filter(Boolean) });
   } catch (e) {
     console.log("extractStreamUrl error:", e);
     return JSON.stringify({ streams: [] });
   }
-}
-
-// ==== DoodStream Extractor + randomStr ====
-async function doodstreamExtractor(html, url = null) {
-  const streamDomain = url.match(/https:\/\/(.*?)\//)[1];
-  const md5Path = html.match(/'\/pass_md5\/(.*?)',/)[1];
-  const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
-  const expiryTimestamp = Date.now();
-  const random = randomStr(10);
-  const passResponse = await fetch(`https://${streamDomain}/pass_md5/${md5Path}`, { headers: { "Referer": url } });
-  const responseData = await passResponse.text();
-  return `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
-}
-
-function randomStr(length) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let result = "";
-  for (let i = 0; i < length; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
-  return result;
 }
 
 function decodeHTMLEntities(text) {
