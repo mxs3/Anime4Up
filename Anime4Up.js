@@ -195,7 +195,6 @@ async function extractStreamUrl(url) {
       const html = await res.text();
       if (!html) return null;
 
-      // ==== DoodStream extraction inline ====
       const streamDomain = embedUrl.match(/https:\/\/(.*?)\//)[1];
       const md5Path = html.match(/'\/pass_md5\/(.*?)',/)[1];
       const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
@@ -213,6 +212,26 @@ async function extractStreamUrl(url) {
     } catch { return null; }
   }
 
+  async function extractStreamwish(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+      if (!res) return null;
+      const html = await res.text();
+      const match = html.match(/sources:\s*\[\s*\{file:"([^"]+)"/i) || html.match(/file:\s*"([^"]+\.(?:mp4|m3u8))"/i);
+      return match ? normalizeUrl(match[1], embedUrl) : null;
+    } catch { return null; }
+  }
+
+  async function extractVidea(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+      if (!res) return null;
+      const html = await res.text();
+      const match = html.match(/"(https?:\/\/[^"]+\/(mp4|m3u8)[^"]*)"/i);
+      return match ? normalizeUrl(match[1], embedUrl) : null;
+    } catch { return null; }
+  }
+
   // ==== Main ====
   try {
     const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
@@ -221,8 +240,7 @@ async function extractStreamUrl(url) {
 
     const anchorRe = /<a\b[^>]*data-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
     const blockedKeywords = ["mega", "megamax", "dailymotion"];
-    const providers = [];
-    const seen = new Set();
+    const providers = [], seen = new Set();
 
     let match;
     while ((match = anchorRe.exec(pageHtml)) !== null) {
@@ -236,13 +254,14 @@ async function extractStreamUrl(url) {
 
     if (!providers.length) return JSON.stringify({ streams: [] });
 
-    // ==== Execute all extractors in parallel ====
     const streams = await Promise.all(providers.map(async (prov) => {
       let direct = null;
       try {
         if (/mp4upload\.com/i.test(prov.rawUrl)) direct = await extractMp4upload(prov.rawUrl);
         else if (/uqload/i.test(prov.rawUrl)) direct = await extractUqload(prov.rawUrl);
         else if (/doodstream\.com/i.test(prov.rawUrl)) direct = await extractDoodStream(prov.rawUrl);
+        else if (/streamwish/i.test(prov.rawUrl)) direct = await extractStreamwish(prov.rawUrl);
+        else if (/videa/i.test(prov.rawUrl)) direct = await extractVidea(prov.rawUrl);
 
         if (!direct) {
           const r = await httpGet(prov.rawUrl, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
