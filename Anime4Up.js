@@ -97,43 +97,54 @@ async function extractEpisodes(url) {
     const firstHtml = await getPage(url);
     if (!firstHtml) return JSON.stringify([]);
 
-    let results = [];
-    const epRegex = /<a[^>]+href="([^"]+)"[^>]*>(?:\s*Episode\s*(\d+)|\s*الحلقة\s*(\d+)|\s*Ep\s*(\d+))?/gi;
-
     // تحديد أقصى عدد صفحات
-    let maxPage = Math.max(1, ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1]));
+    const maxPage = Math.max(
+      1,
+      ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1])
+    );
 
-    // تحميل كل الصفحات
+    // تحميل كل الصفحات مرة واحدة
     const pages = await Promise.all(
       Array.from({ length: maxPage }, (_, i) =>
         getPage(i ? `${url.replace(/\/$/, "")}/page/${i + 1}/` : url)
       )
     );
 
-    // استخراج الحلقات
+    // Map لتجنب التكرار
+    const episodesMap = new Map();
+
+    const linkRegex = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
+    const numRegex = /(?:Episode|الحلقة|Ep)\s*(\d+)/i;
+
     for (const html of pages) {
       let m;
-      while ((m = epRegex.exec(html))) {
-        let num = m[2] || m[3] || m[4] || null;
-        results.push({
-          href: m[1].trim(),
-          number: num ? +num : results.length + 1
-        });
+      while ((m = linkRegex.exec(html))) {
+        const href = m[1].trim();
+        const text = m[2].trim();
+        const numMatch = text.match(numRegex);
+        if (!href) continue;
+
+        let number = numMatch ? parseInt(numMatch[1]) : null;
+
+        // تخزين بدون تكرار
+        if (!episodesMap.has(href)) {
+          episodesMap.set(href, {
+            href,
+            number
+          });
+        }
       }
     }
 
-    // إزالة التكرار (حسب الرابط)
-    const unique = [];
-    const seen = new Set();
-    for (const ep of results) {
-      if (!seen.has(ep.href)) {
-        seen.add(ep.href);
-        unique.push(ep);
-      }
-    }
+    // تحويل لـ array
+    const unique = Array.from(episodesMap.values());
 
-    // ترتيب حسب رقم الحلقة
-    unique.sort((a, b) => a.number - b.number);
+    // ترتيب حسب الرقم (لو مش موجود نحطه آخر القائمة)
+    unique.sort((a, b) => {
+      if (a.number == null) return 1;
+      if (b.number == null) return -1;
+      return a.number - b.number;
+    });
 
     return JSON.stringify(unique);
 
