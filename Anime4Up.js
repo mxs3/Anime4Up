@@ -103,17 +103,19 @@ async function extractEpisodes(url) {
       ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1])
     );
 
-    // تحميل كل الصفحات مرة واحدة
-    const pages = await Promise.all(
-      Array.from({ length: maxPage }, (_, i) =>
-        getPage(i ? `${url.replace(/\/$/, "")}/page/${i + 1}/` : url)
-      )
-    );
+    // تحميل أول صفحة + باقي الصفحات (لكن بتصفية)
+    const pages = [firstHtml];
+    if (maxPage > 1) {
+      // بس هنجيب آخر صفحة + أول صفحة (لأن أغلب المواقع فيها كل الحلقات على طول)
+      const lastPageHtml = await getPage(`${url.replace(/\/$/, "")}/page/${maxPage}/`);
+      if (lastPageHtml) pages.push(lastPageHtml);
+    }
 
     // Map لتجنب التكرار
     const episodesMap = new Map();
 
-    const linkRegex = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
+    // هات بس الروابط اللي فيها كلمة episode
+    const linkRegex = /<a[^>]+href="([^"]+episode[^"]+)"[^>]*>(.*?)<\/a>/gi;
     const numRegex = /(?:Episode|الحلقة|Ep)\s*(\d+)/i;
 
     for (const html of pages) {
@@ -122,6 +124,7 @@ async function extractEpisodes(url) {
         const href = m[1].trim();
         const text = m[2].trim();
         const numMatch = text.match(numRegex);
+
         if (!href) continue;
 
         let number = numMatch ? parseInt(numMatch[1]) : null;
@@ -139,7 +142,7 @@ async function extractEpisodes(url) {
     // تحويل لـ array
     const unique = Array.from(episodesMap.values());
 
-    // ترتيب حسب الرقم (لو مش موجود نحطه آخر القائمة)
+    // ترتيب حسب الرقم
     unique.sort((a, b) => {
       if (a.number == null) return 1;
       if (b.number == null) return -1;
