@@ -317,8 +317,9 @@ async function extractStreamUrl(url) {
       });
       if (!res) return null;
       const html = await res.text();
-      // VK يخزن لينكات مباشرة بصيغة mp4
-      const match = html.match(/"(https?:\/\/[^"]+\.mp4[^"]*)"/i);
+      const match =
+        html.match(/"url\d+":\s*"([^"]+\.mp4[^"]*)"/i) || // جودات متعددة
+        html.match(/"(https?:\/\/[^"]+\.mp4[^"]*)"/i); // لينك مباشر
       return match ? normalizeUrl(match[1], embedUrl) : null;
     } catch {
       return null;
@@ -332,10 +333,9 @@ async function extractStreamUrl(url) {
       });
       if (!res) return null;
       const html = await res.text();
-      // Voe يضع لينكات mp4 أو m3u8 مشفرة
       const match =
-        html.match(/"(https?:\/\/[^"]+\.(?:m3u8|mp4)[^"]*)"/i) ||
-        html.match(/file:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"/i);
+        html.match(/"hls":\s*"([^"]+\.m3u8[^"]*)"/i) ||
+        html.match(/"(https?:\/\/[^"]+\.(?:m3u8|mp4)[^"]*)"/i);
       return match ? normalizeUrl(match[1], embedUrl) : null;
     } catch {
       return null;
@@ -383,7 +383,7 @@ async function extractStreamUrl(url) {
             direct = await extractMp4upload(prov.rawUrl);
           else if (/uqload/i.test(prov.rawUrl))
             direct = await extractUqload(prov.rawUrl);
-          else if (/doodstream\.com/i.test(prov.rawUrl))
+          else if (/dood(stream|watch)\.com/i.test(prov.rawUrl))
             direct = await extractDoodStream(prov.rawUrl);
           else if (/streamwish/i.test(prov.rawUrl))
             direct = await extractStreamwish(prov.rawUrl);
