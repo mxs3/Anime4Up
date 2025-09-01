@@ -284,7 +284,9 @@ async function extractStreamUrl(url) {
       });
       if (!res) return null;
       const html = await res.text();
-      const match = html.match(/"(https?:\/\/[^"]+\/(mp4|m3u8)[^"]*)"/i);
+      const match =
+        html.match(/"(https?:\/\/[^"]+\/(?:mp4|m3u8)[^"]*)"/i) ||
+        html.match(/file:\s*"([^"]+\.(?:mp4|m3u8)[^"]*)"/i);
       return match ? normalizeUrl(match[1], embedUrl) : null;
     } catch {
       return null;
@@ -298,11 +300,42 @@ async function extractStreamUrl(url) {
       });
       if (!res) return null;
       const html = await res.text();
-      // أشهر أنماط لملفات Vidmoly
       const match =
         html.match(/file:\s*"([^"]+\.(?:mp4|m3u8)[^"]*)"/i) ||
         html.match(/src:\s*"([^"]+\.(?:mp4|m3u8)[^"]*)"/i) ||
         html.match(/"(https?:\/\/[^"]+\.(?:mp4|m3u8)[^"]*)"/i);
+      return match ? normalizeUrl(match[1], embedUrl) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function extractVK(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, {
+        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
+      });
+      if (!res) return null;
+      const html = await res.text();
+      // VK يخزن لينكات مباشرة بصيغة mp4
+      const match = html.match(/"(https?:\/\/[^"]+\.mp4[^"]*)"/i);
+      return match ? normalizeUrl(match[1], embedUrl) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function extractVoe(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, {
+        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
+      });
+      if (!res) return null;
+      const html = await res.text();
+      // Voe يضع لينكات mp4 أو m3u8 مشفرة
+      const match =
+        html.match(/"(https?:\/\/[^"]+\.(?:m3u8|mp4)[^"]*)"/i) ||
+        html.match(/file:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"/i);
       return match ? normalizeUrl(match[1], embedUrl) : null;
     } catch {
       return null;
@@ -358,6 +391,10 @@ async function extractStreamUrl(url) {
             direct = await extractVidea(prov.rawUrl);
           else if (/vidmoly/i.test(prov.rawUrl))
             direct = await extractVidmoly(prov.rawUrl);
+          else if (/vk\.com/i.test(prov.rawUrl))
+            direct = await extractVK(prov.rawUrl);
+          else if (/voe\.sx/i.test(prov.rawUrl))
+            direct = await extractVoe(prov.rawUrl);
 
           if (!direct) {
             const r = await httpGet(prov.rawUrl, {
