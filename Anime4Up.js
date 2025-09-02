@@ -177,6 +177,13 @@ async function extractStreamUrl(url) {
     }
   }
 
+  async function httpGetWithTimeout(u, opts = {}, timeout = 10000) {
+    return Promise.race([
+      httpGet(u, opts),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), timeout))
+    ]);
+  }
+
   function safeTrim(s) {
     return s ? String(s).trim() : "";
   }
@@ -201,23 +208,6 @@ async function extractStreamUrl(url) {
     }
   }
 
-  async function checkServer(serverUrl) {
-    try {
-      let resp = null;
-      try {
-        resp = await httpGet(serverUrl, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0" } });
-        if (resp && (resp.status >= 200 && resp.status < 400)) return true;
-      } catch {}
-      try {
-        resp = await httpGet(serverUrl, { method: "GET", headers: { "User-Agent": "Mozilla/5.0" } });
-        if (resp && (resp.status >= 200 && resp.status < 400)) return true;
-      } catch {}
-      return false;
-    } catch {
-      return false;
-    }
-  }
-
   function safeAtob(s) {
     if (typeof atob === "function") return atob(s);
     try {
@@ -227,35 +217,17 @@ async function extractStreamUrl(url) {
     }
   }
 
-  function unpackEval(packed) {
-    if (!packed || typeof packed !== "string") return null;
-    const pAcker = /eval\(function\(p,a,c,k,e,(?:r|d)\)\s*\{([\s\S]+?)\}\)\)/;
-    if (!pAcker.test(packed)) return null;
-
-    try {
-      let cleaned = packed
-        .replace(/\\x([0-9A-Fa-f]{2})/g, (_, g) => String.fromCharCode(parseInt(g, 16)))
-        .replace(/\\u0?([0-9A-Fa-f]{4})/g, (_, g) => String.fromCharCode(parseInt(g, 16)))
-        .replace(/\\'/g, "'")
-        .replace(/\\"/g, '"')
-        .replace(/\\\//g, "/");
-      const b64Matches = cleaned.match(/([A-Za-z0-9\-_]{20,}={0,2})/g) || [];
-      for (const b of b64Matches) {
-        try {
-          const dec = safeAtob(b);
-          if (dec && /https?:\/\//.test(dec)) cleaned += "\n" + dec;
-        } catch {}
-      }
-      return cleaned;
-    } catch {
-      return null;
-    }
+  function randomStr(length) {
+    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let result = "";
+    for (let i = 0; i < length; i++) result += characters.charAt(Math.floor(Math.random() * characters.length));
+    return result;
   }
 
   // ==== Extractors ====
   async function extractMp4upload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+    const res = await httpGetWithTimeout(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const html = await res.text();
     if (html.includes("video you are looking for is not found")) return null;
@@ -270,7 +242,7 @@ async function extractStreamUrl(url) {
 
   async function extractDoodstream(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+    const res = await httpGetWithTimeout(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const html = await res.text();
 
@@ -288,14 +260,11 @@ async function extractStreamUrl(url) {
     const expiryTimestamp = new Date().valueOf();
     const random = randomStr(10);
 
-    const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, {
+    const passResponse = await httpGetWithTimeout(`https://${streamDomain}/pass_md5/${md5Path}`, {
       headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
     });
-    if (!passResponse) {
-      const f2 = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-      if (f2 && f2[0]) return normalizeUrl(f2[0], embedUrl);
-      return null;
-    }
+    if (!passResponse) return null;
+
     const responseData = await passResponse.text();
     const videoUrlCandidate = responseData.trim();
     let videoUrl = videoUrlCandidate;
@@ -307,17 +276,10 @@ async function extractStreamUrl(url) {
     return normalizeUrl(videoUrl, embedUrl);
   }
 
-  function randomStr(length) {
-    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let result = "";
-    for (let i = 0; i < length; i++) result += characters.charAt(Math.floor(Math.random() * characters.length));
-    return result;
-  }
-
   async function extractUqload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
     const headers = { Referer: embedUrl, Origin: "https://uqload.net", "User-Agent": "Mozilla/5.0" };
-    const res = await httpGet(embedUrl, { headers });
+    const res = await httpGetWithTimeout(embedUrl, { headers });
     if (!res) return null;
     const html = await res.text();
     const match = html.match(/sources:\s*\[\s*["']([^"']+\.mp4[^"']*)["']\s*\]/i);
@@ -331,14 +293,15 @@ async function extractStreamUrl(url) {
 
   // ==== Main ====
   try {
-    const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+    const pageRes = await httpGetWithTimeout(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
     if (!pageRes) return JSON.stringify({ streams: [] });
     const pageHtml = await pageRes.text();
 
     const anchorRe = /<a\b[^>]*\bdata-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
     const iframeRe = /<iframe[^>]+src=(?:(['"])(.*?)\1|([^\s>]+))/gi;
 
-    const blockedKeywords = ["mega", "megamax", "dailymotion"];
+    // الفلترة الجديدة
+    const blockedKeywords = ["mega", "megamax", "dailymotion", "vk", "voe", "videa"];
     const providers = [];
     const seen = new Set();
 
@@ -367,22 +330,13 @@ async function extractStreamUrl(url) {
       }
     }
 
-    providers.push(
-      { rawUrl: "https://www.mp4upload.com/embed-djqtega0cr5v.html", title: "mp4upload" },
-      { rawUrl: "https://d-s.io/e/5p6mtck1aw8r", title: "doodstream" }
-    );
-
     if (providers.length === 0) return JSON.stringify({ streams: [] });
 
-    const streams = [];
-    for (const prov of providers) {
+    // هنا بقى نشغل السيرفرات Parallel
+    const results = await Promise.allSettled(providers.map(async (prov) => {
       const u = prov.rawUrl.toLowerCase();
-      if (blockedKeywords.some((kw) => u.includes(kw))) continue;
-
-      const isServerAlive = await checkServer(prov.rawUrl);
-      if (!isServerAlive) continue;
-
       let direct = null;
+
       if (/mp4upload\.com/i.test(u)) {
         direct = await extractMp4upload(prov.rawUrl);
       } else if (/uqload/i.test(u)) {
@@ -393,7 +347,7 @@ async function extractStreamUrl(url) {
 
       if (!direct) {
         try {
-          const r = await httpGet(prov.rawUrl, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+          const r = await httpGetWithTimeout(prov.rawUrl, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
           if (r) {
             const txt = await r.text();
             const found = txt.match(/https?:\/\/[^"'<>\s]+\.m3u8[^"'<>\s]*/i) || txt.match(/https?:\/\/[^"'<>\s]+\.mp4[^"'<>\s]*/i);
@@ -403,11 +357,13 @@ async function extractStreamUrl(url) {
       }
 
       if (direct) {
-        streams.push({ title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } });
+        return { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } };
       } else {
-        streams.push({ title: prov.title + " (embed)", streamUrl: prov.rawUrl, headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+        return { title: prov.title + " (embed)", streamUrl: prov.rawUrl, headers: { Referer: url, "User-Agent": "Mozilla/5.0" } };
       }
-    }
+    }));
+
+    const streams = results.filter(r => r.status === "fulfilled" && r.value).map(r => r.value);
 
     return JSON.stringify({ streams });
   } catch (e) {
