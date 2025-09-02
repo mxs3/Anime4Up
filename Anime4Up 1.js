@@ -1,10 +1,10 @@
 async function searchResults(keyword) {
   try {
-    const url = `https://4q.4ruhzd.shop/?search_param=animes&s=${encodeURIComponent(keyword)}`;
+    const url = `https://ww.anime4up.rest/?search_param=animes&s=${encodeURIComponent(keyword)}`;
     const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://4q.4ruhzd.shop/'
+        'Referer': 'https://ww.anime4up.rest/'
       }
     });
     const html = await res.text();
@@ -87,62 +87,71 @@ async function extractDetails(url) {
 }
 
 async function extractEpisodes(url) {
-  const results = [];
   try {
-    const getPage = async (pageUrl) => {
-      const res = await fetchv2(pageUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          "Referer": url
-        }
-      });
+    async function getPage(u) {
+      const res = await fetchv2(u);
+      if (!res) return "";
       return await res.text();
-    };
+    }
 
     const firstHtml = await getPage(url);
-    const typeMatch = firstHtml.match(/<div class="anime-info"><span>النوع:<\/span>\s*([^<]+)<\/div>/i);
-    const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
+    if (!firstHtml) return JSON.stringify([]);
 
-    if (type.includes("movie") || type.includes("فيلم")) {
-      return JSON.stringify([{ href: url, number: 1 }]);
-    }
+    // تحديد أقصى عدد صفحات
+    const maxPage = Math.max(
+      1,
+      ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1])
+    );
 
-    const paginationRegex = /<a[^>]+href="([^"]+\/page\/\d+\/?)"[^>]*class="page-numbers"/gi;
-    const pagesSet = new Set();
-    let match;
-    while ((match = paginationRegex.exec(firstHtml)) !== null) {
-      pagesSet.add(match[1]);
-    }
+    // تحميل كل الصفحات
+    const pages = await Promise.all(
+      Array.from({ length: maxPage }, (_, i) =>
+        getPage(i ? `${url.replace(/\/$/, "")}/page/${i + 1}/` : url)
+      )
+    );
 
-    const pages = Array.from(pagesSet);
-    pages.push(url);
+    // Map لتجنب التكرار
+    const episodesMap = new Map();
 
-    const htmlPages = await Promise.all(pages.map(page => getPage(page)));
+    // هنصطاد بس الروابط اللي فيها كلمة episode
+    const linkRegex = /<a[^>]+href="([^"]+episode[^"]+)"[^>]*>(.*?)<\/a>/gi;
+    const numRegex = /(?:Episode|الحلقة|Ep)\s*(\d+)/i;
 
-    for (const html of htmlPages) {
-      const episodeRegex = /<div class="episodes-card-title">\s*<h3>\s*<a\s+href="([^"]+)">[^<]*الحلقة\s*(\d+)[^<]*<\/a>/gi;
-      let epMatch;
-      while ((epMatch = episodeRegex.exec(html)) !== null) {
-        const episodeUrl = epMatch[1].trim();
-        const episodeNumber = parseInt(epMatch[2].trim(), 10);
-        if (!isNaN(episodeNumber)) {
-          results.push({
-            href: episodeUrl,
-            number: episodeNumber
+    for (const html of pages) {
+      let m;
+      while ((m = linkRegex.exec(html))) {
+        const href = m[1].trim();
+        const text = m[2].trim();
+        const numMatch = text.match(numRegex);
+
+        if (!href) continue;
+
+        let number = numMatch ? parseInt(numMatch[1]) : null;
+
+        if (!episodesMap.has(href)) {
+          episodesMap.set(href, {
+            href,
+            number
           });
         }
       }
     }
 
-    results.sort((a, b) => a.number - b.number);
+    // تحويل الـ Map لـ Array
+    const unique = Array.from(episodesMap.values());
 
-    if (results.length === 0) {
-      return JSON.stringify([{ href: url, number: 1 }]);
-    }
+    // ترتيب حسب رقم الحلقة
+    unique.sort((a, b) => {
+      if (a.number == null) return 1;
+      if (b.number == null) return -1;
+      return a.number - b.number;
+    });
 
-    return JSON.stringify(results);
-  } catch {
-    return JSON.stringify([{ href: url, number: 1 }]);
+    return JSON.stringify(unique);
+
+  } catch (error) {
+    console.log("Fetch error:", error);
+    return JSON.stringify([]);
   }
 }
 
