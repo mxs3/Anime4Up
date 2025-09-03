@@ -270,6 +270,11 @@ async function extractStreamUrl(url) {
 
   // ==== doodstream Extractor ====
   async function extractDoodstream(embedUrl) {
+    // يدعم كل دومينات Doodstream
+    if (!/(doodstream\.com|dood\.(watch|so|to|pm|wf)|doodstream\.xyz|vide0\.net)/i.test(embedUrl)) {
+        return null;
+    }
+
     embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
@@ -286,7 +291,7 @@ async function extractStreamUrl(url) {
     if (!streamDomainMatch) return null;
     const streamDomain = streamDomainMatch[1];
     const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
-    const expiryTimestamp = new Date().valueOf();
+    const expiryTimestamp = Math.floor(Date.now() / 1000); // ثواني مش ملي ثانية
     const random = randomStr(10);
 
     const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, {
@@ -306,16 +311,16 @@ async function extractStreamUrl(url) {
       videoUrl = `${videoUrlCandidate}${videoUrlCandidate.includes("?") ? "&" : "?"}token=${token}&expiry=${expiryTimestamp}`;
     }
     return normalizeUrl(videoUrl, embedUrl);
-  }
+}
 
-  function randomStr(length) {
+function randomStr(length) {
     const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let result = "";
     for (let i = 0; i < length; i++) {
       result += characters.charAt(Math.floor(Math.random() * characters.length));
     }
     return result;
-  }
+}
 
   // ==== sendvid Extractor ====
   async function extractSendvid(embedUrl) {
