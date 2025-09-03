@@ -276,17 +276,66 @@ async function extractStreamUrl(url) {
     return found ? normalizeUrl(found[0], embedUrl) : null;
   }
   async function extractDoodstream(embedUrl) {
+    embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-    const md5Match = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_]+)/i);
-    if (!md5Match) {
-      const f = html.match(/https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*/i);
-      return f ? normalizeUrl(f[0], embedUrl) : null;
+    if (!res) {
+      console.log("No response from doodstream server");
+      return null;
     }
-    const passRes = await httpGet(`https://${new URL(embedUrl).host}/pass_md5/${md5Match[1]}`, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!passRes) return null;
-    return (await passRes.text()).trim();
+    const html = await res.text();
+
+    // Ø­Ø§ÙÙ ÙÙØ· pass_md5 Ø§ÙÙØ¯ÙÙ Ø£Ù ÙØ³Ø§Ø±Ø§Øª ÙÙØ§Ø«ÙØ©
+    let md5PathMatch = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_\.]+)['"]/i) || html.match(/pass_md5=([a-zA-Z0-9\/\-_\.]+)/i);
+    if (!md5PathMatch) {
+      // fallback: Ø§Ø¨Ø­Ø« Ø¹Ù Ø£Ù mp4 Ø£Ù m3u8
+      const found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
+      if (found && found[0]) return normalizeUrl(found[0], embedUrl);
+      console.log("No md5 path found in doodstream HTML");
+      return null;
+    }
+    const md5Path = md5PathMatch[1].replace(/['"]/g, "");
+    const streamDomainMatch = embedUrl.match(/^https?:\/\/([^\/]+)/i);
+    if (!streamDomainMatch) {
+      console.log("Invalid doodstream URL format");
+      return null;
+    }
+    const streamDomain = streamDomainMatch[1];
+    const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
+    const expiryTimestamp = new Date().valueOf();
+    const random = randomStr(10);
+
+    // Ø­Ø§ÙÙ Ø§Ø³ØªØ¯Ø¹Ø§Ø¡ endpoint pass_md5
+    const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, {
+      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
+    });
+    if (!passResponse) {
+      // fallback: Ø­Ø§ÙÙ ÙØ³Ø§Ø± Ø¢Ø®Ø± Ø£Ù Ø§Ø³ØªØ®Ø±Ø§Ø¬ ÙØ¨Ø§Ø´Ø±
+      const f2 = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
+      if (f2 && f2[0]) return normalizeUrl(f2[0], embedUrl);
+      console.log("No response from doodstream pass_md5");
+      return null;
+    }
+    const responseData = await passResponse.text();
+    // responseData ÙØ¯ ÙÙÙÙ Ø±Ø§Ø¨Ø· ÙØ¨Ø§Ø´Ø± Ø£Ù Ø¬Ø²Ø¡ ÙÙÙ
+    const videoUrlCandidate = responseData.trim();
+    let videoUrl = videoUrlCandidate;
+    if (!/https?:\/\//i.test(videoUrlCandidate)) {
+      videoUrl = `${videoUrlCandidate}${random}?token=${token}&expiry=${expiryTimestamp}`;
+    } else {
+      // ÙÙ Ø§ÙØ±Ø§Ø¨Ø· ÙØ§ÙÙØ Ø£ÙØ­Ù Ø¨Ø§Ø±Ø§ÙÙØªØ± Ø£Ø­ÙØ§ÙÙØ§
+      videoUrl = `${videoUrlCandidate}${videoUrlCandidate.includes("?") ? "&" : "?"}token=${token}&expiry=${expiryTimestamp}`;
+    }
+    console.log("DoodStream Stream URL: " + videoUrl);
+    return normalizeUrl(videoUrl, embedUrl);
+  }
+
+  function randomStr(length) {
+    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let result = "";
+    for (let i = 0; i < length; i++) {
+      result += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    return result;
   }
   async function extractSendvid(embedUrl) {
     const res = await httpGet(embedUrl, { headers: { Referer: "https://sendvid.com/", "User-Agent": "Mozilla/5.0" } });
