@@ -240,13 +240,31 @@ async function extractStreamUrl(url) {
 
   // ==== Other Extractors (mp4upload, uqload, dood, sendvid) ====
   async function extractMp4upload(embedUrl) {
+    embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
+    if (!res) {
+      console.log("No response from mp4upload server");
+      return null;
+    }
     const html = await res.text();
-    const match = html.match(/player\.src\(\{\s*file\s*:\s*["']([^"']+)["']/i);
-    if (match) return normalizeUrl(match[1], embedUrl);
-    const found = html.match(/https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*/i);
-    return found ? normalizeUrl(found[0], embedUrl) : null;
+    if (html.includes("video you are looking for is not found")) {
+      console.log("mp4upload video not found");
+      return null;
+    }
+
+    // Ø§Ø¨Ø­Ø« Ø¨Ø¯ÙØ© Ø£ÙØ«Ø± Ø¯Ø§Ø®Ù Ø§ÙØ³ÙØ±Ø¨Øª
+    let match = html.match(/player\.src\(\{\s*(?:file|src)\s*:\s*["']([^"']+)["']/i);
+    if (match && match[1]) {
+      console.log("mp4upload Stream URL: " + match[1]);
+      return normalizeUrl(match[1], embedUrl);
+    }
+
+    // fallback: Ø£Ù mp4 Ø£Ù m3u8 ÙÙ Ø§ÙØµÙØ­Ø©
+    let found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
+    if (found && found[0]) return normalizeUrl(found[0], embedUrl);
+
+    console.log("No match found for mp4upload extractor");
+    return null;
   }
   async function extractUqload(embedUrl) {
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
