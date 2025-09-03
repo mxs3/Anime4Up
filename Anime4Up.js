@@ -238,34 +238,26 @@ async function extractStreamUrl(url) {
     return result.direct_access_url || (result.source || []).map(s => s.direct_access_url).find(u => u && u.startsWith("http")) || null;
   }
 
-  // ==== Other Extractors (mp4upload, uqload, dood, sendvid) ====
+  // ==== mp4upload Extractor (المعدل) ====
   async function extractMp4upload(embedUrl) {
-  embedUrl = normalizeUrl(embedUrl);
-  const res = await httpGet(embedUrl, {
-    headers: {
-      Referer: embedUrl,
-      "User-Agent": "Mozilla/5.0"
+    embedUrl = normalizeUrl(embedUrl);
+    const res = await httpGet(embedUrl, {
+      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
+    });
+    if (!res) return null;
+    const html = await res.text();
+
+    const regex = /src:\s*"([^"]+)"/;
+    const match = html.match(regex);
+    if (match) {
+      return normalizeUrl(match[1], embedUrl);
+    } else {
+      console.log("No match found for mp4upload extractor");
+      return null;
     }
-  });
-  if (!res) return null;
-  const html = await res.text();
-
-  // أول محاولة: player.src({...})
-  let match = html.match(/player\.src\(\{\s*file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i);
-  if (match) return normalizeUrl(match[1], embedUrl);
-
-  // تاني محاولة: file: "..."
-  match = html.match(/file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i);
-  if (match) return normalizeUrl(match[1], embedUrl);
-
-  // fallback: أي لينك مباشر mp4/m3u8 بس (يستبعد css/js)
-  const found = html.match(/https?:\/\/[^"']+\.(?:mp4|m3u8)(\?[^"']*)?/i);
-  if (found && !/\.css|\.js/i.test(found[0])) {
-    return normalizeUrl(found[0], embedUrl);
   }
 
-  return null;
-}
+  // ==== uqload Extractor ====
   async function extractUqload(embedUrl) {
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
@@ -275,57 +267,44 @@ async function extractStreamUrl(url) {
     const found = html.match(/https?:\/\/[^"']+\.mp4[^"']*/i);
     return found ? normalizeUrl(found[0], embedUrl) : null;
   }
+
+  // ==== doodstream Extractor ====
   async function extractDoodstream(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) {
-      console.log("No response from doodstream server");
-      return null;
-    }
+    if (!res) return null;
     const html = await res.text();
 
-    // Ø­Ø§ÙÙ ÙÙØ· pass_md5 Ø§ÙÙØ¯ÙÙ Ø£Ù ÙØ³Ø§Ø±Ø§Øª ÙÙØ§Ø«ÙØ©
     let md5PathMatch = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_\.]+)['"]/i) || html.match(/pass_md5=([a-zA-Z0-9\/\-_\.]+)/i);
     if (!md5PathMatch) {
-      // fallback: Ø§Ø¨Ø­Ø« Ø¹Ù Ø£Ù mp4 Ø£Ù m3u8
       const found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
       if (found && found[0]) return normalizeUrl(found[0], embedUrl);
-      console.log("No md5 path found in doodstream HTML");
       return null;
     }
     const md5Path = md5PathMatch[1].replace(/['"]/g, "");
     const streamDomainMatch = embedUrl.match(/^https?:\/\/([^\/]+)/i);
-    if (!streamDomainMatch) {
-      console.log("Invalid doodstream URL format");
-      return null;
-    }
+    if (!streamDomainMatch) return null;
     const streamDomain = streamDomainMatch[1];
     const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
     const expiryTimestamp = new Date().valueOf();
     const random = randomStr(10);
 
-    // Ø­Ø§ÙÙ Ø§Ø³ØªØ¯Ø¹Ø§Ø¡ endpoint pass_md5
     const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, {
       headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
     });
     if (!passResponse) {
-      // fallback: Ø­Ø§ÙÙ ÙØ³Ø§Ø± Ø¢Ø®Ø± Ø£Ù Ø§Ø³ØªØ®Ø±Ø§Ø¬ ÙØ¨Ø§Ø´Ø±
       const f2 = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
       if (f2 && f2[0]) return normalizeUrl(f2[0], embedUrl);
-      console.log("No response from doodstream pass_md5");
       return null;
     }
     const responseData = await passResponse.text();
-    // responseData ÙØ¯ ÙÙÙÙ Ø±Ø§Ø¨Ø· ÙØ¨Ø§Ø´Ø± Ø£Ù Ø¬Ø²Ø¡ ÙÙÙ
     const videoUrlCandidate = responseData.trim();
     let videoUrl = videoUrlCandidate;
     if (!/https?:\/\//i.test(videoUrlCandidate)) {
       videoUrl = `${videoUrlCandidate}${random}?token=${token}&expiry=${expiryTimestamp}`;
     } else {
-      // ÙÙ Ø§ÙØ±Ø§Ø¨Ø· ÙØ§ÙÙØ Ø£ÙØ­Ù Ø¨Ø§Ø±Ø§ÙÙØªØ± Ø£Ø­ÙØ§ÙÙØ§
       videoUrl = `${videoUrlCandidate}${videoUrlCandidate.includes("?") ? "&" : "?"}token=${token}&expiry=${expiryTimestamp}`;
     }
-    console.log("DoodStream Stream URL: " + videoUrl);
     return normalizeUrl(videoUrl, embedUrl);
   }
 
@@ -337,6 +316,8 @@ async function extractStreamUrl(url) {
     }
     return result;
   }
+
+  // ==== sendvid Extractor ====
   async function extractSendvid(embedUrl) {
     const res = await httpGet(embedUrl, { headers: { Referer: "https://sendvid.com/", "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
