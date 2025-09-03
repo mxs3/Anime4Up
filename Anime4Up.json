@@ -14,5 +14,6 @@
     "searchBaseUrl": "https://ww.anime4up.rest/?search_param=animes&s=%s",
     "scriptUrl": "https://raw.githubusercontent.com/mxs3/Anime4Up/refs/heads/main/Anime4Up.js",
     "type": "anime",
-    "asyncJS": true
+    "asyncJS": true,
+    "asyncStream": true
 }
