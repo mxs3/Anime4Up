@@ -333,41 +333,51 @@ function randomStr(length) {
     return found ? normalizeUrl(found[0], embedUrl) : null;
   }
 
-  // ==== Main ====
-  try {
-    const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
-    if (!pageRes) return JSON.stringify({ streams: [] });
-    const pageHtml = await pageRes.text();
+// ==== Main ====
+try {
+  const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
+  if (!pageRes) return JSON.stringify({ streams: [] });
+  const pageHtml = await pageRes.text();
 
-    const anchorRe = /<a\b[^>]*\bdata-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
-    const providers = [];
-    const seen = new Set();
-    let m;
-    while ((m = anchorRe.exec(pageHtml)) !== null) {
-      const rawUrl = normalizeUrl(m[2] || m[3] || "", url);
-      if (!rawUrl || seen.has(rawUrl)) continue;
-      seen.add(rawUrl);
-      providers.push({ rawUrl, title: (m[4] || rawUrl).trim() });
-    }
-
-    // Parallel extract
-    const results = await Promise.all(providers.map(async prov => {
-      const u = prov.rawUrl.toLowerCase();
-      let direct = null;
-      if (/voe/.test(u)) direct = await extractVoe(prov.rawUrl);
-      else if (/mp4upload/.test(u)) direct = await extractMp4upload(prov.rawUrl);
-      else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
-      else if (/dood/.test(u)) direct = await extractDoodstream(prov.rawUrl);
-      else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
-
-      return direct ? { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } } : null;
-    }));
-
-    return JSON.stringify({ streams: results.filter(Boolean) });
-  } catch (e) {
-    console.log("extractStreamUrl error:", e);
-    return JSON.stringify({ streams: [] });
+  const anchorRe = /<a\b[^>]*\bdata-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+  const providers = [];
+  const seen = new Set();
+  let m;
+  while ((m = anchorRe.exec(pageHtml)) !== null) {
+    const rawUrl = normalizeUrl(m[2] || m[3] || "", url);
+    if (!rawUrl || seen.has(rawUrl)) continue;
+    seen.add(rawUrl);
+    providers.push({ rawUrl, title: (m[4] || rawUrl).trim() });
   }
+
+  // Parallel extract
+  const results = await Promise.all(providers.map(async prov => {
+    const u = prov.rawUrl.toLowerCase();
+    let direct = null;
+    if (/voe/.test(u)) direct = await extractVoe(prov.rawUrl);
+    else if (/mp4upload/.test(u)) direct = await extractMp4upload(prov.rawUrl);
+    else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
+    else if (/dood/.test(u)) direct = await extractDoodstream(prov.rawUrl);
+    else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
+
+    return direct ? { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } } : null;
+  }));
+
+  let streams = results.filter(Boolean);
+
+  // === fallback لو مفيش أي سيرفر شغال ===
+  if (streams.length === 0) {
+    streams.push({
+      title: "Fallback Server",
+      streamUrl: url, // بيرجع اللينك الأساسي على الأقل
+      headers: { Referer: url, "User-Agent": "Mozilla/5.0" }
+    });
+  }
+
+  return JSON.stringify({ streams });
+} catch (e) {
+  console.log("extractStreamUrl error:", e);
+  return JSON.stringify({ streams: [] });
 }
 
 function decodeHTMLEntities(text) {
