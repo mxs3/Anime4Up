@@ -204,7 +204,7 @@ async function extractStreamUrl(url) {
     }
   }
 
-  // ==== VOE Extractor helpers ====
+  // ==== VOE Extractor ====
   function voeRot13(str) {
     return str.replace(/[a-zA-Z]/g, function (c) {
       return String.fromCharCode(
@@ -212,34 +212,28 @@ async function extractStreamUrl(url) {
       );
     });
   }
-
   function voeRemovePatterns(str) {
     const patterns = ["@$", "^^", "~@", "%?", "*~", "!!", "#&"];
     let result = str;
     for (const pat of patterns) result = result.split(pat).join("");
     return result;
   }
-
   function voeBase64Decode(str) {
     if (typeof atob === "function") return atob(str);
     return Buffer.from(str, "base64").toString("utf-8");
   }
-
   function voeShiftChars(str, shift) {
     return str.split("").map(c => String.fromCharCode(c.charCodeAt(0) - shift)).join("");
   }
-
   async function extractVoe(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const html = await res.text();
-
     const jsonScriptMatch = html.match(
       /<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i
     );
     if (!jsonScriptMatch) return null;
-
     let data;
     try {
       data = JSON.parse(jsonScriptMatch[1].trim());
@@ -247,21 +241,18 @@ async function extractStreamUrl(url) {
       return null;
     }
     if (!Array.isArray(data) || typeof data[0] !== "string") return null;
-
     let step1 = voeRot13(data[0]);
     let step2 = voeRemovePatterns(step1);
     let step3 = voeBase64Decode(step2);
     let step4 = voeShiftChars(step3, 3);
     let step5 = step4.split("").reverse().join("");
     let step6 = voeBase64Decode(step5);
-
     let result;
     try {
       result = JSON.parse(step6);
     } catch {
       return null;
     }
-
     if (result && typeof result === "object") {
       return (
         result.direct_access_url ||
@@ -351,7 +342,9 @@ async function extractStreamUrl(url) {
       providers.push({ rawUrl, title });
     }
 
-    if (providers.length === 0) return JSON.stringify({ streams: [] });
+    if (providers.length === 0) {
+      return JSON.stringify({ streams: [] });
+    }
 
     const streams = [];
     for (const prov of providers) {
