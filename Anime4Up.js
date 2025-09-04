@@ -270,56 +270,80 @@ async function extractStreamUrl(url) {
 
   // ==== doodstream Extractor ====
   async function extractDoodstream(embedUrl) {
-    // يدعم كل دومينات Doodstream
-    if (!/(doodstream\.com|dood\.(watch|so|to|pm|wf)|doodstream\.xyz|vide0\.net)/i.test(embedUrl)) {
-        return null;
-    }
+  // يدعم كل دومينات Doodstream
+  if (!/(doodstream\.com|dood\.(watch|so|to|pm|wf)|doodstream\.xyz|vide0\.net)/i.test(embedUrl)) {
+    return null;
+  }
 
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
+  embedUrl = normalizeUrl(embedUrl);
+  const res = await httpGet(embedUrl, {
+    headers: { 
+      Referer: embedUrl,
+      "User-Agent": "Mozilla/5.0"
+    }
+  });
+  if (!res) return null;
 
-    let md5PathMatch = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_\.]+)['"]/i) || html.match(/pass_md5=([a-zA-Z0-9\/\-_\.]+)/i);
-    if (!md5PathMatch) {
-      const found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-      if (found && found[0]) return normalizeUrl(found[0], embedUrl);
-      return null;
-    }
-    const md5Path = md5PathMatch[1].replace(/['"]/g, "");
-    const streamDomainMatch = embedUrl.match(/^https?:\/\/([^\/]+)/i);
-    if (!streamDomainMatch) return null;
-    const streamDomain = streamDomainMatch[1];
-    const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
-    const expiryTimestamp = Math.floor(Date.now() / 1000); // ثواني مش ملي ثانية
-    const random = randomStr(10);
+  const html = await res.text();
 
-    const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, {
-      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
-    });
-    if (!passResponse) {
-      const f2 = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-      if (f2 && f2[0]) return normalizeUrl(f2[0], embedUrl);
-      return null;
+  // 1️⃣ لو لقي روابط مباشرة
+  const directMatch = [...html.matchAll(/https?:\/\/[^\s"']+\.(?:m3u8|mp4)[^\s"']*/gi)];
+  if (directMatch.length > 0) {
+    return directMatch.map(x => normalizeUrl(x[0], embedUrl));
+  }
+
+  // 2️⃣ لو لقي sources بالجودات
+  const sourcesBlock = html.match(/sources\s*:\s*\{([^}]+)\}/i);
+  if (sourcesBlock) {
+    const matches = [...sourcesBlock[1].matchAll(/"(\d+p)"\s*:\s*"([^"]+)"/gi)];
+    if (matches.length > 0) {
+      return matches.map(m => ({
+        quality: m[1],
+        url: normalizeUrl(m[2], embedUrl)
+      }));
     }
-    const responseData = await passResponse.text();
-    const videoUrlCandidate = responseData.trim();
-    let videoUrl = videoUrlCandidate;
-    if (!/https?:\/\//i.test(videoUrlCandidate)) {
-      videoUrl = `${videoUrlCandidate}${random}?token=${token}&expiry=${expiryTimestamp}`;
-    } else {
-      videoUrl = `${videoUrlCandidate}${videoUrlCandidate.includes("?") ? "&" : "?"}token=${token}&expiry=${expiryTimestamp}`;
+  }
+
+  // 3️⃣ fallback pass_md5
+  const md5PathMatch = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_\.]+)/i);
+  if (!md5PathMatch) return null;
+
+  const md5Path = md5PathMatch[1];
+  const domainMatch = embedUrl.match(/^https?:\/\/([^\/]+)/i);
+  if (!domainMatch) return null;
+
+  const domain = domainMatch[1];
+  const passUrl = `https://${domain}/pass_md5/${md5Path}`;
+
+  const passRes = await httpGet(passUrl, {
+    headers: {
+      Referer: embedUrl,
+      "User-Agent": "Mozilla/5.0"
     }
-    return normalizeUrl(videoUrl, embedUrl);
+  });
+  if (!passRes) return null;
+
+  let passTxt = (await passRes.text()).trim();
+
+  if (!passTxt.startsWith("http")) {
+    passTxt = `https://${domain}${passTxt}`;
+  }
+
+  const token = md5Path.split("/").pop();
+  const expiry = Math.floor(Date.now() / 1000);
+  const rand = randomStr(10);
+
+  const finalUrl = `${passTxt}${passTxt.includes("?") ? "&" : "?"}token=${token}&expiry=${expiry}&random=${rand}`;
+  return [{ quality: "auto", url: normalizeUrl(finalUrl, embedUrl) }];
 }
 
-function randomStr(length) {
-    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let result = "";
-    for (let i = 0; i < length; i++) {
-      result += characters.charAt(Math.floor(Math.random() * characters.length));
-    }
-    return result;
+function randomStr(len) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let out = "";
+  for (let i = 0; i < len; i++) {
+    out += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return out;
 }
 
   // ==== sendvid Extractor ====
