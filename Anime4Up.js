@@ -268,53 +268,52 @@ async function extractStreamUrl(url) {
   }
 
   // ==== doodstream Extractor ====
-  async function extractDoodstream(embedUrl) {
-    embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
+  async function doodstreamExtractor(html, url = null) {
+  console.log("DoodStream extractor called");
+  console.log("DoodStream extractor URL: " + url);
 
-    let md5PathMatch = html.match(/\/pass_md5\/([a-zA-Z0-9\/\-_\.]+)['"]/i) || html.match(/pass_md5=([a-zA-Z0-9\/\-_\.]+)/i);
-    if (!md5PathMatch) {
-      const found = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-      if (found && found[0]) return normalizeUrl(found[0], embedUrl);
-      return null;
-    }
-    const md5Path = md5PathMatch[1].replace(/['"]/g, "");
-    const streamDomainMatch = embedUrl.match(/^https?:\/\/([^\/]+)/i);
-    if (!streamDomainMatch) return null;
-    const streamDomain = streamDomainMatch[1];
-    const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
-    const expiryTimestamp = new Date().valueOf();
-    const random = randomStr(10);
+  try {
+    // domain
+    const streamDomain = url.match(/https:\/\/(.*?)\//)[1];
 
-    const passResponse = await httpGet(`https://${streamDomain}/pass_md5/${md5Path}`, {
-      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
-    });
-    if (!passResponse) {
-      const f2 = html.match(/https?:\/\/[^"'<>\s]+(?:\.m3u8|\.mp4)[^"'<>\s]*/i);
-      if (f2 && f2[0]) return normalizeUrl(f2[0], embedUrl);
-      return null;
+    // pass_md5
+    const md5Match = html.match(/'\/pass_md5\/([^']+)'/);
+    if (md5Match) {
+      const md5Path = md5Match[1];
+      const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
+      const expiryTimestamp = Date.now();
+      const random = randomStr(10);
+
+      const passResponse = await fetch(`https://${streamDomain}/pass_md5/${md5Path}`, {
+        headers: { Referer: url },
+      });
+      console.log("DoodStream extractor response: " + passResponse.status);
+      if (passResponse.ok) {
+        const responseData = (await passResponse.text()).trim();
+        const videoUrl = `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
+        console.log("DoodStream extractor video URL: " + videoUrl);
+        return videoUrl;
+      }
     }
-    const responseData = await passResponse.text();
-    const videoUrlCandidate = responseData.trim();
-    let videoUrl = videoUrlCandidate;
-    if (!/https?:\/\//i.test(videoUrlCandidate)) {
-      videoUrl = `${videoUrlCandidate}${random}?token=${token}&expiry=${expiryTimestamp}`;
-    } else {
-      videoUrl = `${videoUrlCandidate}${videoUrlCandidate.includes("?") ? "&" : "?"}token=${token}&expiry=${expiryTimestamp}`;
+
+    // fallback → direct m3u8/mp4
+    const directMatch = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
+    if (directMatch) {
+      console.log("DoodStream fallback link:", directMatch[0]);
+      return directMatch[0];
     }
-    return normalizeUrl(videoUrl, embedUrl);
+
+    return null;
+  } catch (err) {
+    console.log("DoodStream extractor error:", err);
+    return null;
   }
+}
 
-  function randomStr(length) {
-    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let result = "";
-    for (let i = 0; i < length; i++) {
-      result += characters.charAt(Math.floor(Math.random() * characters.length));
-    }
-    return result;
-  }
+function randomStr(length) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from({ length }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join("");
+}
 
   // ==== sendvid Extractor ====
   async function extractSendvid(embedUrl) {
