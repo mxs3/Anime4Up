@@ -327,16 +327,51 @@ async function extractStreamUrl(url) {
     return found ? normalizeUrl(found[0], embedUrl) : null;
   }
 
-  // ==== VK Extractor ====
-  async function extractVk(embedUrl) {
-    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-    const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/i);
-    if (hlsMatch && hlsMatch[1]) {
-      return hlsMatch[1].replace(/\\\//g, "/");
+  // ==== Videa Extractor ====
+  async function extractVidea(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, {
+        headers: {
+          Referer: embedUrl,
+          "User-Agent": "Mozilla/5.0"
+        }
+      });
+      if (!res) return null;
+
+      const text = await res.text();
+
+      const matches = [...text.matchAll(/https:\/\/videa\.hu\/static\/(\d+p)\/[^\s"']+/g)];
+      if (matches.length > 0) {
+        return matches.map(m => ({
+          quality: m[1],
+          url: m[0],
+          type: "mp4"
+        }));
+      }
+
+      const b64Match = text.match(/([A-Za-z0-9+/=]{100,})/);
+      if (b64Match) {
+        try {
+          const b64 = b64Match[1];
+          const decoded = atob(b64);
+          const staticMatches = [...decoded.matchAll(/https:\/\/videa\.hu\/static\/(\d+p)\/[^\s"']+/g)];
+          if (staticMatches.length > 0) {
+            return staticMatches.map(m => ({
+              quality: m[1],
+              url: m[0],
+              type: "mp4"
+            }));
+          }
+        } catch (e) {
+          console.log("Decode error:", e);
+        }
+      }
+
+      return null;
+    } catch (err) {
+      console.log("Videa extractor error:", err);
+      return null;
     }
-    return null;
   }
 
   // ==== Main ====
@@ -356,7 +391,6 @@ async function extractStreamUrl(url) {
       providers.push({ rawUrl, title: (m[4] || rawUrl).trim() });
     }
 
-    // Parallel extract
     const results = await Promise.all(providers.map(async prov => {
       const u = prov.rawUrl.toLowerCase();
       let direct = null;
@@ -365,12 +399,23 @@ async function extractStreamUrl(url) {
       else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
       else if (/dood/.test(u)) direct = await extractDoodstream(prov.rawUrl);
       else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
-      else if (/vk\.com/.test(u) || /\/vk\//.test(u)) direct = await extractVk(prov.rawUrl);
+      else if (/videa/.test(u)) direct = await extractVidea(prov.rawUrl);
 
-      return direct ? { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } } : null;
+      if (!direct) return null;
+
+      if (Array.isArray(direct)) {
+        return direct.map(d => ({
+          title: `${prov.title} [${d.quality}]`,
+          streamUrl: d.url,
+          type: d.type,
+          headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" }
+        }));
+      }
+
+      return { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } };
     }));
 
-    return JSON.stringify({ streams: results.filter(Boolean) });
+    return JSON.stringify({ streams: results.flat().filter(Boolean) });
   } catch (e) {
     console.log("extractStreamUrl error:", e);
     return JSON.stringify({ streams: [] });
