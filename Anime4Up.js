@@ -187,57 +187,6 @@ async function extractStreamUrl(url) {
     }
   }
 
-  // ==== VOE Extractor ====
-  function voeRot13(str) {
-    return str.replace(/[a-zA-Z]/g, c =>
-      String.fromCharCode((c <= "Z" ? 90 : 122) >= (c = c.charCodeAt(0) + 13) ? c : c - 26)
-    );
-  }
-  function voeRemovePatterns(str) {
-    const patterns = ["@$", "^^", "~@", "%?", "*~", "!!", "#&"];
-    let result = str;
-    for (const pat of patterns) result = result.split(pat).join("");
-    return result;
-  }
-  function voeBase64Decode(str) {
-    if (typeof atob === "function") return atob(str);
-    return Buffer.from(str, "base64").toString("utf-8");
-  }
-  function voeShiftChars(str, shift) {
-    return str.split("").map(c => String.fromCharCode(c.charCodeAt(0) - shift)).join("");
-  }
-  async function extractVoe(embedUrl) {
-    const res = await httpGet(embedUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-    if (!res) return null;
-    const html = await res.text();
-
-    const jsonScriptMatch = html.match(/<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i);
-    if (!jsonScriptMatch) return null;
-
-    let data;
-    try {
-      data = JSON.parse(jsonScriptMatch[1].trim());
-    } catch {
-      return null;
-    }
-    if (!Array.isArray(data) || typeof data[0] !== "string") return null;
-
-    let step1 = voeRot13(data[0]);
-    let step2 = voeRemovePatterns(step1);
-    let step3 = voeBase64Decode(step2);
-    let step4 = voeShiftChars(step3, 3);
-    let step5 = step4.split("").reverse().join("");
-    let step6 = voeBase64Decode(step5);
-
-    let result;
-    try {
-      result = JSON.parse(step6);
-    } catch {
-      return null;
-    }
-    return result.direct_access_url || (result.source || []).map(s => s.direct_access_url).find(u => u && u.startsWith("http")) || null;
-  }
-
   // ==== mp4upload Extractor ====
   async function extractMp4upload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
@@ -267,11 +216,20 @@ async function extractStreamUrl(url) {
     return found ? normalizeUrl(found[0], embedUrl) : null;
   }
 
-  // ==== doodstream Extractor ====
-  // ==== DoodStream Extractor (سورا متوافق + Auto-check) ====
-async function doodstreamExtractor(embedUrl) {
+// ==== DoodStream / Vide0 Extractor (سورا متوافق) ====
+async function extractDoodstream(embedUrl) {
   try {
-    // خطوة 1: نجيب صفحة الـ embed/watch
+    // ===== Helper: random string =====
+    function randomStr(len) {
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+      let result = "";
+      for (let i = 0; i < len; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return result;
+    }
+
+    // ===== Step 1: fetch embed/watch page =====
     const res = await fetchv2(embedUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0",
@@ -281,17 +239,20 @@ async function doodstreamExtractor(embedUrl) {
     if (!res) return null;
     const html = await res.text();
 
-    // خطوة 2: نلقط pass_md5 path
+    // ===== Step 2: extract /pass_md5 path =====
     const md5Match = html.match(/\/pass_md5\/[a-z0-9]+/i);
-    if (!md5Match) return null;
+    if (!md5Match) {
+      console.log("DoodStream: pass_md5 not found");
+      return null;
+    }
     const md5Path = md5Match[0];
 
-    // خطوة 3: نجيب دومين السيرفر
+    // ===== Step 3: extract domain =====
     const domainMatch = embedUrl.match(/https?:\/\/([^/]+)/i);
     if (!domainMatch) return null;
     const domain = domainMatch[1];
 
-    // خطوة 4: نجيب الـ token part من pass_md5
+    // ===== Step 4: fetch pass_md5 response =====
     const passUrl = `https://${domain}${md5Path}`;
     const passRes = await fetchv2(passUrl, {
       headers: {
@@ -300,48 +261,66 @@ async function doodstreamExtractor(embedUrl) {
       }
     });
     const tokenPart = await passRes.text();
-    if (!tokenPart) return null;
-
-    // خطوة 5: random string + expiry
-    function randomStr(len) {
-      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-      let result = "";
-      for (let i = 0; i < len; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      return result;
-    }
-    const random = randomStr(10);
-    const expiry = Date.now();
-    const token = md5Path.split("/").pop();
-
-    // خطوة 6: تركيب اللينك النهائي
-    const finalUrl = `${tokenPart}${random}?token=${token}&expiry=${expiry}`;
-
-    // خطوة 7: auto-check (HEAD request)
-    try {
-      const checkRes = await fetchv2(finalUrl, {
-        method: "HEAD",
-        headers: { "User-Agent": "Mozilla/5.0" }
-      });
-      if (!checkRes || checkRes.status !== 200) {
-        console.log("DoodStream auto-check failed:", checkRes?.status);
-        return null;
-      }
-    } catch (e) {
-      console.log("DoodStream check error:", e);
+    if (!tokenPart) {
+      console.log("DoodStream: token part empty");
       return null;
     }
 
-    // خطوة 8: إرجاع بصيغة سورا
-    return [
-      {
-        quality: "HD",
-        url: finalUrl,
-        type: "mp4",
-        server: "DoodStream"
+    // ===== Step 5: build base stream url =====
+    const token = md5Path.split("/").pop();
+    const expiry = Date.now();
+    const random = randomStr(10);
+
+    const baseUrl = `${tokenPart}${random}?token=${token}&expiry=${expiry}`;
+
+    // ===== Step 6: try multiple qualities =====
+    const qualities = ["480p", "720p", "1080p"];
+    const streams = [];
+
+    for (const q of qualities) {
+      // بعض السيرفرات بتبقى نفس اللينك بجودة واحدة فقط → نحاول نركب
+      let tryUrl = baseUrl.replace("/d/", `/${q}/`);
+      if (tryUrl === baseUrl) tryUrl = baseUrl; // fallback
+
+      try {
+        const checkRes = await fetchv2(tryUrl, {
+          method: "HEAD",
+          headers: { "User-Agent": "Mozilla/5.0" }
+        });
+        if (checkRes && checkRes.status === 200) {
+          streams.push({
+            quality: q,
+            url: tryUrl,
+            type: "mp4",
+            server: "DoodStream"
+          });
+        }
+      } catch (e) {
+        console.log("DoodStream check failed:", e);
       }
-    ];
+    }
+
+    // ===== Step 7: fallback (لو الجودات مش موجودة) =====
+    if (streams.length === 0) {
+      try {
+        const checkRes = await fetchv2(baseUrl, {
+          method: "HEAD",
+          headers: { "User-Agent": "Mozilla/5.0" }
+        });
+        if (checkRes && checkRes.status === 200) {
+          streams.push({
+            quality: "HD",
+            url: baseUrl,
+            type: "mp4",
+            server: "DoodStream"
+          });
+        }
+      } catch (e) {
+        console.log("DoodStream base check failed:", e);
+      }
+    }
+
+    return streams.length > 0 ? streams : null;
   } catch (err) {
     console.log("DoodStream extractor error:", err);
     return null;
