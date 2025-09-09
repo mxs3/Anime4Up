@@ -269,39 +269,32 @@ async function extractStreamUrl(url) {
 
   // ==== doodstream Extractor ====
   async function doodstreamExtractor(html, url = null) {
-  console.log("DoodStream extractor called");
-  console.log("DoodStream extractor URL: " + url);
-
   try {
-    // domain
-    const streamDomain = url.match(/https:\/\/(.*?)\//)[1];
+    const domainMatch = url.match(/https:\/\/([^/]+)/);
+    const streamDomain = domainMatch ? domainMatch[1] : null;
 
-    // pass_md5
+    // نحاول بطريقة pass_md5 (الرسمية)
     const md5Match = html.match(/'\/pass_md5\/([^']+)'/);
-    if (md5Match) {
+    if (streamDomain && md5Match) {
       const md5Path = md5Match[1];
       const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
       const expiryTimestamp = Date.now();
       const random = randomStr(10);
 
-      const passResponse = await fetch(`https://${streamDomain}/pass_md5/${md5Path}`, {
+      const passUrl = `https://${streamDomain}/pass_md5/${md5Path}`;
+      const passResponse = await fetch(passUrl, {
         headers: { Referer: url },
       });
-      console.log("DoodStream extractor response: " + passResponse.status);
+
       if (passResponse.ok) {
         const responseData = (await passResponse.text()).trim();
-        const videoUrl = `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
-        console.log("DoodStream extractor video URL: " + videoUrl);
-        return videoUrl;
+        return `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
       }
     }
 
-    // fallback → direct m3u8/mp4
+    // fallback → أي mp4/m3u8 مباشر
     const directMatch = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
-    if (directMatch) {
-      console.log("DoodStream fallback link:", directMatch[0]);
-      return directMatch[0];
-    }
+    if (directMatch) return directMatch[0];
 
     return null;
   } catch (err) {
@@ -310,6 +303,7 @@ async function extractStreamUrl(url) {
   }
 }
 
+// مولد random string
 function randomStr(length) {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   return Array.from({ length }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join("");
