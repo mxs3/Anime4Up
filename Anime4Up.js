@@ -238,7 +238,7 @@ async function extractStreamUrl(url) {
     return result.direct_access_url || (result.source || []).map(s => s.direct_access_url).find(u => u && u.startsWith("http")) || null;
   }
 
-  // ==== mp4upload Extractor (المعدل) ====
+  // ==== mp4upload Extractor ====
   async function extractMp4upload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
     const res = await httpGet(embedUrl, {
@@ -252,7 +252,6 @@ async function extractStreamUrl(url) {
     if (match) {
       return normalizeUrl(match[1], embedUrl);
     } else {
-      console.log("No match found for mp4upload extractor");
       return null;
     }
   }
@@ -328,6 +327,18 @@ async function extractStreamUrl(url) {
     return found ? normalizeUrl(found[0], embedUrl) : null;
   }
 
+  // ==== VK Extractor ====
+  async function extractVk(embedUrl) {
+    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+    if (!res) return null;
+    const html = await res.text();
+    const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/i);
+    if (hlsMatch && hlsMatch[1]) {
+      return hlsMatch[1].replace(/\\\//g, "/");
+    }
+    return null;
+  }
+
   // ==== Main ====
   try {
     const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
@@ -354,6 +365,7 @@ async function extractStreamUrl(url) {
       else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
       else if (/dood/.test(u)) direct = await extractDoodstream(prov.rawUrl);
       else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
+      else if (/vk\.com/.test(u) || /\/vk\//.test(u)) direct = await extractVk(prov.rawUrl);
 
       return direct ? { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } } : null;
     }));
