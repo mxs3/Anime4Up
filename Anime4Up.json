@@ -15,6 +15,5 @@
     "scriptUrl": "https://raw.githubusercontent.com/mxs3/Anime4Up/refs/heads/main/Anime4Up.js",
     "type": "anime",
     "asyncJS": true,
-    "asyncStream": true,
-    "downloadSupport": true
+    "asyncStream": true
 }
