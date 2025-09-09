@@ -333,12 +333,21 @@ async function extractDoodstream(embedUrl) {
 
     // extract /pass_md5 path
     const md5Match = html.match(/\/pass_md5\/[a-z0-9\/\-_\.]+/i);
-    if (!md5Match) {
-      console.log("DoodStream: pass_md5 not found");
-      const direct = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
-      return direct ? [ { quality: "DoodStream", url: normalizeUrl(direct[0], embedUrl), type: "mp4", server: "DoodStream" } ] : null;
+
+    // direct links fallback
+    let streams = [];
+    const directMatches = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi)];
+    for (const m of directMatches) {
+      const url = normalizeUrl(m[1], embedUrl);
+      const title = m[2].trim();
+      if (url) streams.push({ title, streamUrl: url, type: "mp4", headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }, server: "DoodStream" });
     }
-    const md5Path = md5Match[0];
+
+    if (!md5Match) {
+      if (streams.length) return streams;
+      const direct = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
+      return direct ? [ { title: "DoodStream", streamUrl: normalizeUrl(direct[0], embedUrl), type: "mp4", headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }, server: "DoodStream" } ] : null;
+    }
 
     // domain extraction
     const domainMatch = embedUrl.match(/https?:\/\/([^/]+)/i);
@@ -346,6 +355,7 @@ async function extractDoodstream(embedUrl) {
     const domain = domainMatch[1];
 
     // fetch pass_md5
+    const md5Path = md5Match[0];
     const passUrl = `https://${domain}${md5Path}`;
     const passRes = await httpGet(passUrl, { headers: { "Referer": embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!passRes) return null;
@@ -358,18 +368,20 @@ async function extractDoodstream(embedUrl) {
     const random = randomStr(10);
     const streamUrl = `${tokenPart}${random}?token=${token}&expiry=${expiry}`;
 
-    // extract quality label from page
-    let quality = "DoodStream"; // default → اسم السيرفر
-    const qMatch = html.match(/quality["'\s:=-]+([A-Z0-9]+)/i) || html.match(/\b(HD|SD|FHD)\b/i);
-    if (qMatch) quality = qMatch[1].toUpperCase();
+    // استخدم أي اسم جودة موجود في الصفحة (SD, HD, FHD) أو النص الموجود جنب اللينك
+    const qMatches = [...html.matchAll(/\b(SD|HD|FHD)\b/gi)];
+    const qualities = qMatches.length ? qMatches.map(m => m[0].toUpperCase()) : [];
 
-    // return single stream
-    return [ {
-      quality,
-      url: streamUrl,
-      type: "mp4",
-      server: "DoodStream"
-    } ];
+    if (qualities.length) {
+      // لو فيه أكتر من جودة، نرجع كل واحدة كـ stream منفصل
+      qualities.forEach(q => streams.push({ title: q, streamUrl, type: "mp4", headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }, server: "DoodStream" }));
+    } else {
+      // لو مفيش جودة مكتوبة، نرجع اللينك زي ما هو مع اسمه
+      streams.push({ title: "DoodStream", streamUrl, type: "mp4", headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }, server: "DoodStream" });
+    }
+
+    return streams.length ? streams : null;
+
   } catch (err) {
     console.log("extractDoodstream error:", err);
     return null;
