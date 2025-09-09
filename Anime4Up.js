@@ -312,26 +312,49 @@ async function extractStreamUrl(url) {
 
   // ==== Vadbam Extractor ====
   async function extractVadbam(embedUrl) {
-    try {
-      const pageRes = await httpGet(embedUrl, { headers: { "Referer": embedUrl, "User-Agent": "Mozilla/5.0" } });
-      if (!pageRes) return null;
-      const html = await pageRes.text();
+  try {
+    const res = await httpGet(embedUrl, { headers: { "Referer": embedUrl, "User-Agent": "Mozilla/5.0" } });
+    if (!res) return null;
+    const html = await res.text();
 
-      const regex = /https?:\/\/(?:[a-zA-Z0-9_\-./]+\/)*(?:[a-zA-Z0-9_\-]+)\.(?:mp4|m3u8)(?:\?[^"'<>]*)?/gi;
-      const matches = [...html.matchAll(regex)];
-      if (!matches.length) return null;
+    // 1) Regex قوي جداً يلتقط أي mp4 أو m3u8
+    const regex = /https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8)(?:\?[^"'<>]*)?/gi;
+    let matches = [...html.matchAll(regex)];
 
-      return matches.map(m => ({
-        quality: "Vadbam",
-        url: normalizeUrl(m[0], embedUrl),
-        type: m[0].includes(".m3u8") ? "hls" : "mp4",
-        server: "Vadbam"
-      }));
-    } catch (err) {
-      console.log("extractVadbam error:", err);
-      return null;
+    // 2) لو لسه فاضي، حاول إزالة أي \ أو فراغات
+    if (!matches.length) {
+      const cleanHtml = html.replace(/\\|\s/g, "");
+      matches = [...cleanHtml.matchAll(regex)];
     }
+    if (!matches.length) return null;
+
+    // 3) حاول نستخرج الجودة من الرابط أو من النص حوله
+    return matches.map(m => {
+      const url = normalizeUrl(m[0], embedUrl);
+      let quality = "Vadbam";
+
+      // استخراج الجودة من الرابط نفسه: ex: 720p, 1080p
+      const qMatch = url.match(/(\d{3,4}p)/i);
+      if (qMatch) quality = qMatch[1];
+
+      // أو محاولة أخذ اسم الجودة من النص حول الرابط في HTML
+      const surroundingText = html.substring(Math.max(0, m.index - 50), m.index + 50);
+      const textQ = surroundingText.match(/\b(HD|FHD|720p|1080p|480p|360p)\b/i);
+      if (textQ) quality = textQ[1];
+
+      return {
+        quality,
+        url,
+        type: url.includes(".m3u8") ? "hls" : "mp4",
+        server: "Vadbam"
+      };
+    });
+
+  } catch (err) {
+    console.log("extractVadbam error:", err);
+    return null;
   }
+}
 
   // ==== Main ====
   try {
