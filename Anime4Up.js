@@ -501,54 +501,72 @@ function decodeHTMLEntities(text) {
     return text;
 }
 
+// ===== Unbaser Class =====
 class Unbaser {
     constructor(base) {
         this.ALPHABET = {
             62: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            95: "' !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~'",
+            95: "' !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~'"
         };
         this.dictionary = {};
         this.base = base;
         if (36 < base && base < 62) {
-            this.ALPHABET[base] = this.ALPHABET[base] ||
-                this.ALPHABET[62].substr(0, base);
+            this.ALPHABET[base] = this.ALPHABET[base] || this.ALPHABET[62].substr(0, base);
         }
         if (2 <= base && base <= 36) {
             this.unbase = (value) => parseInt(value, base);
-        }
-        else {
-            try {
-                [...this.ALPHABET[base]].forEach((cipher, index) => {
-                    this.dictionary[cipher] = index;
-                });
-            }
-            catch (er) {
-                throw Error("Unsupported base encoding.");
-            }
+        } else {
+            try { [...this.ALPHABET[base]].forEach((c,i)=>this.dictionary[c]=i); }
+            catch { throw Error("Unsupported base encoding."); }
             this.unbase = this._dictunbaser;
         }
     }
     _dictunbaser(value) {
-        let ret = 0;
-        [...value].reverse().forEach((cipher, index) => {
-            ret = ret + ((Math.pow(this.base, index)) * this.dictionary[cipher]);
-        });
+        let ret=0;
+        [...value].reverse().forEach((c,i)=>ret+=Math.pow(this.base,i)*this.dictionary[c]);
         return ret;
     }
 }
 
+// ===== Detect if P.A.C.K.E.R. Encoded =====
 function detect(source) {
-    return source.replace(" ", "").startsWith("eval(function(p,a,c,k,e,");
+    return source.replace(/\s+/g, "").startsWith("eval(function(p,a,c,k,e,");
 }
 
+// ===== Unpack P.A.C.K.E.R. =====
 function unpack(source) {
-    let { payload, symtab, radix, count } = _filterargs(source);
-    if (count != symtab.length) {
-        throw Error("Malformed p.a.c.k.e.r. symtab.");
+    function _filterargs(src) {
+        const juicers = [
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *(\d+), *(.*)\)\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
+        ];
+        for (const j of juicers) {
+            const args = j.exec(src);
+            if (args) {
+                try {
+                    return {
+                        payload: args[1],
+                        radix: parseInt(args[2]),
+                        count: parseInt(args[3]),
+                        symtab: args[4].split("|")
+                    };
+                } catch {
+                    throw Error("Malformed p.a.c.k.e.r. data.");
+                }
+            }
+        }
+        throw Error("Could not parse p.a.c.k.e.r. data.");
     }
-    let unbase;
-    try {
-        unbase = new Unbaser(radix);
-    }
-    catch (e) {
-        throw Error("Unknown p.a.c.k.e.r. encoding.");
+
+    const { payload, symtab, radix, count } = _filterargs(source);
+    if (count !== symtab.length) throw Error("Symtab count mismatch.");
+    const unbase = new Unbaser(radix);
+
+    const lookup = (match) => {
+        const w = match;
+        let val = radix===1 ? symtab[parseInt(w)] : symtab[unbase.unbase(w)];
+        return val || w;
+    };
+    const replaced = payload.replace(/\b\w+\b/g, lookup);
+    return replaced; // ممكن تعمل تحسين لو حابب _replacestrings لاحقاً
+}
