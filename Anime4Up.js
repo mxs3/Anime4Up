@@ -216,117 +216,6 @@ async function extractStreamUrl(url) {
     return found ? normalizeUrl(found[0], embedUrl) : null;
   }
 
-// ==== DoodStream / Vide0 Extractor (سورا متوافق) ====
-async function extractDoodstream(embedUrl) {
-  try {
-    // ===== Helper: random string =====
-    function randomStr(len) {
-      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-      let result = "";
-      for (let i = 0; i < len; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      return result;
-    }
-
-    // ===== Step 1: fetch embed/watch page =====
-    const res = await fetchv2(embedUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": embedUrl
-      }
-    });
-    if (!res) return null;
-    const html = await res.text();
-
-    // ===== Step 2: extract /pass_md5 path =====
-    const md5Match = html.match(/\/pass_md5\/[a-z0-9]+/i);
-    if (!md5Match) {
-      console.log("DoodStream: pass_md5 not found");
-      return null;
-    }
-    const md5Path = md5Match[0];
-
-    // ===== Step 3: extract domain =====
-    const domainMatch = embedUrl.match(/https?:\/\/([^/]+)/i);
-    if (!domainMatch) return null;
-    const domain = domainMatch[1];
-
-    // ===== Step 4: fetch pass_md5 response =====
-    const passUrl = `https://${domain}${md5Path}`;
-    const passRes = await fetchv2(passUrl, {
-      headers: {
-        "Referer": embedUrl,
-        "User-Agent": "Mozilla/5.0"
-      }
-    });
-    const tokenPart = await passRes.text();
-    if (!tokenPart) {
-      console.log("DoodStream: token part empty");
-      return null;
-    }
-
-    // ===== Step 5: build base stream url =====
-    const token = md5Path.split("/").pop();
-    const expiry = Date.now();
-    const random = randomStr(10);
-
-    const baseUrl = `${tokenPart}${random}?token=${token}&expiry=${expiry}`;
-
-    // ===== Step 6: try multiple qualities =====
-    const qualities = ["480p", "720p", "1080p"];
-    const streams = [];
-
-    for (const q of qualities) {
-      // بعض السيرفرات بتبقى نفس اللينك بجودة واحدة فقط → نحاول نركب
-      let tryUrl = baseUrl.replace("/d/", `/${q}/`);
-      if (tryUrl === baseUrl) tryUrl = baseUrl; // fallback
-
-      try {
-        const checkRes = await fetchv2(tryUrl, {
-          method: "HEAD",
-          headers: { "User-Agent": "Mozilla/5.0" }
-        });
-        if (checkRes && checkRes.status === 200) {
-          streams.push({
-            quality: q,
-            url: tryUrl,
-            type: "mp4",
-            server: "DoodStream"
-          });
-        }
-      } catch (e) {
-        console.log("DoodStream check failed:", e);
-      }
-    }
-
-    // ===== Step 7: fallback (لو الجودات مش موجودة) =====
-    if (streams.length === 0) {
-      try {
-        const checkRes = await fetchv2(baseUrl, {
-          method: "HEAD",
-          headers: { "User-Agent": "Mozilla/5.0" }
-        });
-        if (checkRes && checkRes.status === 200) {
-          streams.push({
-            quality: "HD",
-            url: baseUrl,
-            type: "mp4",
-            server: "DoodStream"
-          });
-        }
-      } catch (e) {
-        console.log("DoodStream base check failed:", e);
-      }
-    }
-
-    return streams.length > 0 ? streams : null;
-  } catch (err) {
-    console.log("DoodStream extractor error:", err);
-    return null;
-  }
-}
-
   // ==== sendvid Extractor ====
   async function extractSendvid(embedUrl) {
     const res = await httpGet(embedUrl, { headers: { Referer: "https://sendvid.com/", "User-Agent": "Mozilla/5.0" } });
@@ -336,6 +225,43 @@ async function extractDoodstream(embedUrl) {
     if (match) return normalizeUrl(match[1], embedUrl);
     const found = html.match(/https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*/i);
     return found ? normalizeUrl(found[0], embedUrl) : null;
+  }
+
+  // ==== VOE Extractor (simple + robust fallback) ====
+  async function extractVoe(embedUrl) {
+    try {
+      // prefer httpGet if present
+      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+      if (!res) return null;
+      const html = await res.text();
+
+      // 1) direct property
+      let m = html.match(/"direct_access_url"\s*:\s*"([^"]+)"/i);
+      if (m && m[1]) return m[1].replace(/\\\//g, "/");
+
+      // 2) JSON <script type="application/json"> ... </script>
+      let jsonScript = html.match(/<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i);
+      if (jsonScript && jsonScript[1]) {
+        try {
+          const parsed = JSON.parse(jsonScript[1].trim());
+          if (parsed && typeof parsed === "object") {
+            if (parsed.direct_access_url) return parsed.direct_access_url;
+            if (Array.isArray(parsed.source)) {
+              for (const s of parsed.source) if (s.direct_access_url) return s.direct_access_url;
+            }
+          }
+        } catch (e) { /* ignore */ }
+      }
+
+      // 3) fallback: any mp4 / m3u8
+      const any = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
+      if (any) return any[0].replace(/\\\//g, "/");
+
+      return null;
+    } catch (e) {
+      console.log("extractVoe error:", e);
+      return null;
+    }
   }
 
   // ==== Videa Extractor ====
@@ -351,6 +277,7 @@ async function extractDoodstream(embedUrl) {
 
       const text = await res.text();
 
+      // direct static links (common case)
       const matches = [...text.matchAll(/https:\/\/videa\.hu\/static\/(\d+p)\/[^\s"']+/g)];
       if (matches.length > 0) {
         return matches.map(m => ({
@@ -360,21 +287,25 @@ async function extractDoodstream(embedUrl) {
         }));
       }
 
+      // fallback: big base64 block (if present) -> try atob decode and re-run regex
       const b64Match = text.match(/([A-Za-z0-9+/=]{100,})/);
       if (b64Match) {
         try {
           const b64 = b64Match[1];
-          const decoded = atob(b64);
-          const staticMatches = [...decoded.matchAll(/https:\/\/videa\.hu\/static\/(\d+p)\/[^\s"']+/g)];
-          if (staticMatches.length > 0) {
-            return staticMatches.map(m => ({
-              quality: m[1],
-              url: m[0],
-              type: "mp4"
-            }));
+          let decoded = null;
+          try { decoded = (typeof atob === "function") ? atob(b64) : Buffer.from(b64, "base64").toString("utf-8"); } catch(e){}
+          if (decoded) {
+            const staticMatches = [...decoded.matchAll(/https:\/\/videa\.hu\/static\/(\d+p)\/[^\s"']+/g)];
+            if (staticMatches.length > 0) {
+              return staticMatches.map(m => ({
+                quality: m[1],
+                url: m[0],
+                type: "mp4"
+              }));
+            }
           }
         } catch (e) {
-          console.log("Decode error:", e);
+          console.log("Videa decode error:", e);
         }
       }
 
@@ -385,12 +316,116 @@ async function extractDoodstream(embedUrl) {
     }
   }
 
+  // ==== DoodStream / Vide0 Extractor (سورا متوافق + multi-quality + check) ====
+  async function extractDoodstream(embedUrl) {
+    try {
+      function randomStr(len) {
+        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let result = "";
+        for (let i = 0; i < len; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+        return result;
+      }
+
+      // fetch embed page (use httpGet so it works with fetchv2 fallback)
+      const pageRes = await httpGet(embedUrl, { headers: { "Referer": embedUrl, "User-Agent": "Mozilla/5.0" } });
+      if (!pageRes) return null;
+      const html = await pageRes.text();
+
+      // extract /pass_md5 path
+      const md5Match = html.match(/\/pass_md5\/[a-z0-9\/\-_\.]+/i);
+      if (!md5Match) {
+        console.log("DoodStream: pass_md5 not found");
+        // as extra fallback try to find direct mp4/m3u8 in the embed
+        const direct = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
+        return direct ? [ { quality: "HD", url: normalizeUrl(direct[0], embedUrl), type: "mp4", server: "DoodStream" } ] : null;
+      }
+      const md5Path = md5Match[0];
+
+      // domain extraction for pass request
+      const domainMatch = embedUrl.match(/https?:\/\/([^/]+)/i);
+      if (!domainMatch) return null;
+      const domain = domainMatch[1];
+
+      // fetch pass_md5 result
+      const passUrl = `https://${domain}${md5Path}`;
+      const passRes = await httpGet(passUrl, { headers: { "Referer": embedUrl, "User-Agent": "Mozilla/5.0" } });
+      if (!passRes) return null;
+      const tokenPart = (await passRes.text()).trim();
+      if (!tokenPart) return null;
+
+      // build base stream url (tokenPart + random + token + expiry)
+      const token = md5Path.split("/").pop();
+      const expiry = Date.now();
+      const random = randomStr(10);
+      const baseUrl = `${tokenPart}${random}?token=${token}&expiry=${expiry}`;
+
+      // attempt multiple quality patterns — many mirrors only use single path but we try variants
+      const qualities = ["360p", "480p", "720p", "1080p"];
+      const streams = [];
+
+      for (const q of qualities) {
+        // some mirrors encode quality into path: try replacing /d/ with /{q}/ (best-effort)
+        let tryUrl = baseUrl;
+        try {
+          tryUrl = baseUrl.replace(/\/d\//, `/${q}/`);
+        } catch (_) {}
+        // HEAD-check that link exists
+        try {
+          const headRes = await httpGet(tryUrl, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0", Referer: embedUrl } });
+          if (headRes && headRes.status === 200) {
+            streams.push({ quality: q, url: tryUrl, type: "mp4", server: "DoodStream" });
+          }
+        } catch (e) {
+          // ignore check errors
+        }
+      }
+
+      // fallback to baseUrl if nothing matched
+      if (streams.length === 0) {
+        try {
+          const headRes = await httpGet(baseUrl, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0", Referer: embedUrl } });
+          if (headRes && headRes.status === 200) {
+            streams.push({ quality: "HD", url: baseUrl, type: "mp4", server: "DoodStream" });
+          }
+        } catch (e) {}
+      }
+
+      return streams.length ? streams : null;
+    } catch (err) {
+      console.log("extractDoodstream error:", err);
+      return null;
+    }
+  }
+
+  // ==== Dailymotion Extractor (simple) ====
+  async function extractDailymotion(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+      if (!res) return null;
+      const html = await res.text();
+
+      // try HLS or progressive links present in page
+      const hls = html.match(/"stream_h264_hls_url"\s*:\s*"([^"]+)"/i) || html.match(/"hls"\s*:\s*"([^"]+)"/i);
+      if (hls && hls[1]) return normalizeUrl(hls[1].replace(/\\\//g, "/"), embedUrl);
+
+      // try progressive mp4
+      const mp4 = html.match(/"progressive_url"\s*:\s*"([^"]+)"/i) || html.match(/https?:\/\/[^"']+\.mp4[^"']*/i);
+      if (mp4 && mp4[1]) return normalizeUrl(mp4[1].replace(/\\\//g, "/"), embedUrl);
+
+      return null;
+    } catch (e) {
+      console.log("extractDailymotion error:", e);
+      return null;
+    }
+  }
+
   // ==== Main ====
   try {
     const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
     if (!pageRes) return JSON.stringify({ streams: [] });
     const pageHtml = await pageRes.text();
 
+    // gather provider links (data-ep-url anchors used by your system)
     const anchorRe = /<a\b[^>]*\bdata-ep-url\s*=\s*(?:(['"])(.*?)\1|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi;
     const providers = [];
     const seen = new Set();
@@ -402,27 +437,42 @@ async function extractDoodstream(embedUrl) {
       providers.push({ rawUrl, title: (m[4] || rawUrl).trim() });
     }
 
+    // if anchors not present, also try iframe srcs as backup
+    if (providers.length === 0) {
+      const iframeMatches = [...pageHtml.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi)];
+      for (const im of iframeMatches) {
+        const rawUrl = normalizeUrl(im[1], url);
+        if (!rawUrl || seen.has(rawUrl)) continue;
+        seen.add(rawUrl);
+        providers.push({ rawUrl, title: rawUrl });
+      }
+    }
+
     const results = await Promise.all(providers.map(async prov => {
       const u = prov.rawUrl.toLowerCase();
       let direct = null;
+
       if (/voe/.test(u)) direct = await extractVoe(prov.rawUrl);
       else if (/mp4upload/.test(u)) direct = await extractMp4upload(prov.rawUrl);
       else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
-      else if (/dood/.test(u)) direct = await extractDoodstream(prov.rawUrl);
+      else if (/(dood|vide0\.net|doodstream|dood\.watch|dood\.so)/.test(u)) direct = await extractDoodstream(prov.rawUrl);
       else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
       else if (/videa/.test(u)) direct = await extractVidea(prov.rawUrl);
+      else if (/dailymotion\.com|dai\.ly/.test(u)) direct = await extractDailymotion(prov.rawUrl);
 
       if (!direct) return null;
 
+      // normalize returned form: either array of streams or a single url/string
       if (Array.isArray(direct)) {
         return direct.map(d => ({
-          title: `${prov.title} [${d.quality}]`,
+          title: `${prov.title} [${d.quality || "auto"}]`,
           streamUrl: d.url,
-          type: d.type,
+          type: d.type || "mp4",
           headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" }
         }));
       }
 
+      // direct string -> single stream
       return { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } };
     }));
 
