@@ -268,45 +268,84 @@ async function extractStreamUrl(url) {
   }
 
   // ==== doodstream Extractor ====
-  async function doodstreamExtractor(html, url = null) {
+  // ==== DoodStream Extractor (سورا متوافق + Auto-check) ====
+async function doodstreamExtractor(embedUrl) {
   try {
-    const domainMatch = url.match(/https:\/\/([^/]+)/);
-    const streamDomain = domainMatch ? domainMatch[1] : null;
-
-    // نحاول بطريقة pass_md5 (الرسمية)
-    const md5Match = html.match(/'\/pass_md5\/([^']+)'/);
-    if (streamDomain && md5Match) {
-      const md5Path = md5Match[1];
-      const token = md5Path.substring(md5Path.lastIndexOf("/") + 1);
-      const expiryTimestamp = Date.now();
-      const random = randomStr(10);
-
-      const passUrl = `https://${streamDomain}/pass_md5/${md5Path}`;
-      const passResponse = await fetch(passUrl, {
-        headers: { Referer: url },
-      });
-
-      if (passResponse.ok) {
-        const responseData = (await passResponse.text()).trim();
-        return `${responseData}${random}?token=${token}&expiry=${expiryTimestamp}`;
+    // خطوة 1: نجيب صفحة الـ embed/watch
+    const res = await fetchv2(embedUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": embedUrl
       }
+    });
+    if (!res) return null;
+    const html = await res.text();
+
+    // خطوة 2: نلقط pass_md5 path
+    const md5Match = html.match(/\/pass_md5\/[a-z0-9]+/i);
+    if (!md5Match) return null;
+    const md5Path = md5Match[0];
+
+    // خطوة 3: نجيب دومين السيرفر
+    const domainMatch = embedUrl.match(/https?:\/\/([^/]+)/i);
+    if (!domainMatch) return null;
+    const domain = domainMatch[1];
+
+    // خطوة 4: نجيب الـ token part من pass_md5
+    const passUrl = `https://${domain}${md5Path}`;
+    const passRes = await fetchv2(passUrl, {
+      headers: {
+        "Referer": embedUrl,
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
+    const tokenPart = await passRes.text();
+    if (!tokenPart) return null;
+
+    // خطوة 5: random string + expiry
+    function randomStr(len) {
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+      let result = "";
+      for (let i = 0; i < len; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return result;
+    }
+    const random = randomStr(10);
+    const expiry = Date.now();
+    const token = md5Path.split("/").pop();
+
+    // خطوة 6: تركيب اللينك النهائي
+    const finalUrl = `${tokenPart}${random}?token=${token}&expiry=${expiry}`;
+
+    // خطوة 7: auto-check (HEAD request)
+    try {
+      const checkRes = await fetchv2(finalUrl, {
+        method: "HEAD",
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
+      if (!checkRes || checkRes.status !== 200) {
+        console.log("DoodStream auto-check failed:", checkRes?.status);
+        return null;
+      }
+    } catch (e) {
+      console.log("DoodStream check error:", e);
+      return null;
     }
 
-    // fallback → أي mp4/m3u8 مباشر
-    const directMatch = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
-    if (directMatch) return directMatch[0];
-
-    return null;
+    // خطوة 8: إرجاع بصيغة سورا
+    return [
+      {
+        quality: "HD",
+        url: finalUrl,
+        type: "mp4",
+        server: "DoodStream"
+      }
+    ];
   } catch (err) {
     console.log("DoodStream extractor error:", err);
     return null;
   }
-}
-
-// مولد random string
-function randomStr(length) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  return Array.from({ length }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join("");
 }
 
   // ==== sendvid Extractor ====
