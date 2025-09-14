@@ -312,47 +312,84 @@ async function extractStreamUrl(url) {
 
   // ==== Vadbam Extractor ====
   async function extractVadbam(embedUrl) {
-  try {
-    const res = await httpGet(embedUrl, {
-      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-    });
-    if (!res) return null;
-    let html = await res.text();
+    try {
+      const res = await httpGet(embedUrl, {
+        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
+      });
+      if (!res) return null;
+      let html = await res.text();
+      html = html.replace(/\\+/g, "");
 
-    // 1) ننظف النص من أي \ أو تشويش
-    html = html.replace(/\\+/g, "");
+      const regex = /https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8)(?:\?[^"'<>]*)?/gi;
+      let matches = [...html.matchAll(regex)];
+      if (!matches.length) return null;
 
-    // 2) نبحث عن أي mp4 أو m3u8 في HTML أو JS
-    const regex = /https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8)(?:\?[^"'<>]*)?/gi;
-    let matches = [...html.matchAll(regex)];
-    if (!matches.length) return null;
+      return matches.map(m => {
+        const url = normalizeUrl(m[0], embedUrl);
+        let quality = "Vadbam";
+        const qMatch = url.match(/(\d{3,4}p)/i);
+        if (qMatch) quality = qMatch[1];
+        const surroundingText = html.substring(Math.max(0, m.index - 50), m.index + 50);
+        const textQ = surroundingText.match(/\b(HD|FHD|720p|1080p|480p|360p)\b/i);
+        if (textQ) quality = textQ[1];
 
-    // 3) نجمع النتائج مع تحديد الجودة من الرابط أو من النص المحيط
-    return matches.map(m => {
-      const url = normalizeUrl(m[0], embedUrl);
-      let quality = "Vadbam";
-
-      // محاولة استخراج الجودة من الرابط
-      const qMatch = url.match(/(\d{3,4}p)/i);
-      if (qMatch) quality = qMatch[1];
-
-      // محاولة استخراج الجودة من النص المحيط في HTML
-      const surroundingText = html.substring(Math.max(0, m.index - 50), m.index + 50);
-      const textQ = surroundingText.match(/\b(HD|FHD|720p|1080p|480p|360p)\b/i);
-      if (textQ) quality = textQ[1];
-
-      return {
-        quality,
-        url,
-        type: url.includes(".m3u8") ? "hls" : "mp4",
-        server: "Vadbam"
-      };
-    });
-  } catch (err) {
-    console.log("extractVadbam error:", err);
-    return null;
+        return {
+          quality,
+          url,
+          type: url.includes(".m3u8") ? "hls" : "mp4",
+          server: "Vadbam"
+        };
+      });
+    } catch (err) {
+      console.log("extractVadbam error:", err);
+      return null;
+    }
   }
-}
+
+  // ==== VK Extractor ====
+  async function extractVK(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+      if (!res) return null;
+      const html = await res.text();
+      const results = [];
+
+      // HLS
+      const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
+      if (hlsMatch) {
+        const hlsUrl = hlsMatch[1].replace(/\\\//g, "/");
+        const hlsRes = await httpGet(hlsUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+        if (hlsRes) {
+          const m3u8 = await hlsRes.text();
+          const qualityMatches = [...m3u8.matchAll(/RESOLUTION=\d+x(\d+)[\s\S]*?\n(https?:\/\/[^\s]+)/g)];
+          for (const qm of qualityMatches) {
+            results.push({
+              quality: qm[1] + "p",
+              url: qm[2],
+              type: "hls",
+              server: "VK"
+            });
+          }
+        }
+      }
+
+      // MP4
+      const mp4Matches = [...html.matchAll(/"url(\d{2,4})":"(https:[^"]+)"/g)];
+      for (const m of mp4Matches) {
+        results.push({
+          quality: m[1] + "p",
+          url: m[2].replace(/\\\//g, "/"),
+          type: "mp4",
+          server: "VK"
+        });
+      }
+
+      return results.length ? results : null;
+    } catch (err) {
+      console.log("extractVK error:", err);
+      return null;
+    }
+  }
 
   // ==== Main ====
   try {
@@ -390,7 +427,8 @@ async function extractStreamUrl(url) {
       else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
       else if (/(dood|vide0\.net|doodstream|dood\.watch|dood\.so|DoodStream)/.test(u)) direct = await extractDoodstream(prov.rawUrl);
       else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
-      else if (/poiu\.vadbam\.net/.test(u)) direct = await extractVadbam(prov.rawUrl); // Vadbam support
+      else if (/poiu\.vadbam\.net/.test(u)) direct = await extractVadbam(prov.rawUrl);
+      else if (/vkvideo\.ru/.test(u)) direct = await extractVK(prov.rawUrl); // VK support
 
       if (!direct) return null;
 
@@ -414,19 +452,19 @@ async function extractStreamUrl(url) {
 }
 
 function decodeHTMLEntities(text) {
-    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
+  text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
 
-    const entities = {
-        '&quot;': '"',
-        '&amp;': '&',
-        '&apos;': "'",
-        '&lt;': '<',
-        '&gt;': '>'
-    };
+  const entities = {
+    '&quot;': '"',
+    '&amp;': '&',
+    '&apos;': "'",
+    '&lt;': '<',
+    '&gt;': '>'
+  };
 
-    for (const entity in entities) {
-        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
-    }
+  for (const entity in entities) {
+    text = text.replace(new RegExp(entity, 'g'), entities[entity]);
+  }
 
-    return text;
+  return text;
 }
