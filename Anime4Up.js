@@ -305,48 +305,50 @@ async function extractStreamUrl(url) {
     }
   }
   
-  // ==== Vadbam Extractor (Fixed) ====
+// ==== Vadbam Extractor (MP4 Only, Force Mode) ====
 async function extractVadbam(embedUrl) {
   try {
     const res = await httpGet(embedUrl, {
-      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
+      headers: { 
+        Referer: embedUrl, 
+        "User-Agent": "Mozilla/5.0" 
+      },
+      redirect: "follow"
     });
     if (!res) return null;
     let html = await res.text();
 
-    // 1) نلاقي الكود المشفر eval
-    const packedMatch = html.match(/eval\(function\(p,a,c,k,e,[\s\S]+?\)\)/);
-    if (!packedMatch) {
-      console.log("Vadbam extractor: No packed script found");
-      return null;
-    }
+    // شيل أي backslashes أو ترميزات
+    html = html.replace(/\\+/g, "");
 
-    // 2) نفك التشفير باستخدام eval sandbox
-    let unpacked = "";
-    try {
-      unpacked = eval(packedMatch[0]);
-    } catch (err) {
-      console.log("Vadbam extractor unpack error:", err);
-      return null;
-    }
+    const results = [];
 
-    // 3) ندور على لينكات الفيديو
-    const regex = /https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8)(?:\?[^"'<>]*)?/gi;
-    let matches = [...unpacked.matchAll(regex)];
-    if (!matches.length) return null;
-
-    return matches.map(m => {
-      const url = normalizeUrl(m[0], embedUrl);
+    // هات أي لينك mp4 مباشر
+    const mp4Matches = [...html.matchAll(/https?:\/\/[^\s"'<>]+?\.mp4(?:\?[^"'<>]*)?/gi)];
+    for (const m of mp4Matches) {
       let quality = "Vadbam";
-      const qMatch = url.match(/(\d{3,4}p)/i);
+      const qMatch = m[0].match(/(\d{3,4}p)/i);
       if (qMatch) quality = qMatch[1];
-      return {
+      results.push({
         quality,
-        url,
-        type: url.includes(".m3u8") ? "hls" : "mp4",
+        url: normalizeUrl(m[0], embedUrl),
+        type: "mp4",
         server: "Vadbam"
-      };
-    });
+      });
+    }
+
+    // fallback لو فيه "file":"..."
+    const fileJsonMatches = [...html.matchAll(/"file"\s*:\s*"([^"]+\.mp4[^"]*)"/gi)];
+    for (const fm of fileJsonMatches) {
+      results.push({
+        quality: "auto",
+        url: normalizeUrl(fm[1], embedUrl),
+        type: "mp4",
+        server: "Vadbam"
+      });
+    }
+
+    return results.length ? results : null;
   } catch (err) {
     console.log("extractVadbam error:", err);
     return null;
@@ -434,7 +436,7 @@ async function extractVadbam(embedUrl) {
       else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
       else if (/(dood|vide0\.net|doodstream|dood\.watch|dood\.so|DoodStream)/.test(u)) direct = await extractDoodstream(prov.rawUrl);
       else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
-      else if (/poiu\.vadbam\.net/.test(u) || /vadbam/.test(u)) direct = await extractVadbam(prov.rawUrl);
+      else if (/(vadbam|vdbtm)/i.test(u)) direct = await extractVadbam(prov.rawUrl);
       else if (/vkvideo\.ru/.test(u) || /vk\.com\/video/.test(u) || /vk\.com\/video_ext\.php/.test(u)) direct = await extractVK(prov.rawUrl);
 
       if (!direct) return null;
