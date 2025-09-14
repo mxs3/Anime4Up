@@ -304,38 +304,54 @@ async function extractStreamUrl(url) {
       return null;
     }
   }
+  
+  // ==== Vadbam Extractor (Fixed) ====
+async function extractVadbam(embedUrl) {
+  try {
+    const res = await httpGet(embedUrl, {
+      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
+    });
+    if (!res) return null;
+    let html = await res.text();
 
-  // ==== Vadbam Extractor ====
-  async function extractVadbam(embedUrl) {
-    try {
-      const res = await httpGet(embedUrl, {
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-      });
-      if (!res) return null;
-      let html = await res.text();
-      html = html.replace(/\\+/g, "");
-
-      const regex = /https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8)(?:\?[^"'<>]*)?/gi;
-      let matches = [...html.matchAll(regex)];
-      if (!matches.length) return null;
-
-      return matches.map(m => {
-        const url = normalizeUrl(m[0], embedUrl);
-        let quality = "Vadbam";
-        const qMatch = url.match(/(\d{3,4}p)/i);
-        if (qMatch) quality = qMatch[1];
-        return {
-          quality,
-          url,
-          type: url.includes(".m3u8") ? "hls" : "mp4",
-          server: "Vadbam"
-        };
-      });
-    } catch (err) {
-      console.log("extractVadbam error:", err);
+    // 1) نلاقي الكود المشفر eval
+    const packedMatch = html.match(/eval\(function\(p,a,c,k,e,[\s\S]+?\)\)/);
+    if (!packedMatch) {
+      console.log("Vadbam extractor: No packed script found");
       return null;
     }
+
+    // 2) نفك التشفير باستخدام eval sandbox
+    let unpacked = "";
+    try {
+      unpacked = eval(packedMatch[0]);
+    } catch (err) {
+      console.log("Vadbam extractor unpack error:", err);
+      return null;
+    }
+
+    // 3) ندور على لينكات الفيديو
+    const regex = /https?:\/\/[^\s"'<>]+?\.(?:mp4|m3u8)(?:\?[^"'<>]*)?/gi;
+    let matches = [...unpacked.matchAll(regex)];
+    if (!matches.length) return null;
+
+    return matches.map(m => {
+      const url = normalizeUrl(m[0], embedUrl);
+      let quality = "Vadbam";
+      const qMatch = url.match(/(\d{3,4}p)/i);
+      if (qMatch) quality = qMatch[1];
+      return {
+        quality,
+        url,
+        type: url.includes(".m3u8") ? "hls" : "mp4",
+        server: "Vadbam"
+      };
+    });
+  } catch (err) {
+    console.log("extractVadbam error:", err);
+    return null;
   }
+}
 
   // ==== VK Extractor ====
   async function extractVK(embedUrl) {
