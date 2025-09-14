@@ -237,17 +237,12 @@ async function extractStreamUrl(url) {
       let m = html.match(/"direct_access_url"\s*:\s*"([^"]+)"/i);
       if (m && m[1]) return m[1].replace(/\\\//g, "/");
 
-      let jsonScript = html.match(/<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i);
-      if (jsonScript && jsonScript[1]) {
-        try {
-          const parsed = JSON.parse(jsonScript[1].trim());
-          if (parsed && typeof parsed === "object") {
-            if (parsed.direct_access_url) return parsed.direct_access_url;
-            if (Array.isArray(parsed.source)) {
-              for (const s of parsed.source) if (s.direct_access_url) return s.direct_access_url;
-            }
-          }
-        } catch (e) { }
+      const sourcesMatch = html.match(/sources:\s*\[\{file:"([^"]+)",label:"([^"]+)"}/i);
+      if (sourcesMatch) {
+        return {
+          url: sourcesMatch[1],
+          quality: sourcesMatch[2] || "HD"
+        };
       }
 
       const any = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
@@ -329,10 +324,6 @@ async function extractStreamUrl(url) {
         let quality = "Vadbam";
         const qMatch = url.match(/(\d{3,4}p)/i);
         if (qMatch) quality = qMatch[1];
-        const surroundingText = html.substring(Math.max(0, m.index - 50), m.index + 50);
-        const textQ = surroundingText.match(/\b(HD|FHD|720p|1080p|480p|360p)\b/i);
-        if (textQ) quality = textQ[1];
-
         return {
           quality,
           url,
@@ -427,8 +418,8 @@ async function extractStreamUrl(url) {
       else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
       else if (/(dood|vide0\.net|doodstream|dood\.watch|dood\.so|DoodStream)/.test(u)) direct = await extractDoodstream(prov.rawUrl);
       else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
-      else if (/poiu\.vadbam\.net/.test(u)) direct = await extractVadbam(prov.rawUrl);
-      else if (/vkvideo\.ru/.test(u)) direct = await extractVK(prov.rawUrl); // VK support
+      else if (/poiu\.vadbam\.net/.test(u) || /vadbam/.test(u)) direct = await extractVadbam(prov.rawUrl);
+      else if (/vkvideo\.ru/.test(u) || /vk\.com\/video/.test(u) || /vk\.com\/video_ext\.php/.test(u)) direct = await extractVK(prov.rawUrl);
 
       if (!direct) return null;
 
@@ -441,7 +432,7 @@ async function extractStreamUrl(url) {
         }));
       }
 
-      return { title: prov.title, streamUrl: direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } };
+      return { title: prov.title, streamUrl: direct.url || direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } };
     }));
 
     return JSON.stringify({ streams: results.flat().filter(Boolean) });
