@@ -411,8 +411,7 @@ async function extractVK(url) {
       const u = prov.rawUrl.toLowerCase();
       let direct = null;
 
-      if (/voe/.test(u)) direct = await extractVoe(prov.rawUrl);
-      else if (/mp4upload/.test(u)) direct = await extractMp4upload(prov.rawUrl);
+      if (/mp4upload/.test(u)) direct = await extractMp4upload(prov.rawUrl);
       else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
       else if (/(dood|vide0\.net|doodstream|dood\.watch|dood\.so|DoodStream)/.test(u)) direct = await extractDoodstream(prov.rawUrl);
       else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
