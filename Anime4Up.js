@@ -356,49 +356,65 @@ async function extractVadbam(embedUrl) {
 }
 
   // ==== VK Extractor ====
-  async function extractVK(embedUrl) {
-    try {
-      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-      if (!res) return null;
-      const html = await res.text();
-      const results = [];
+async function extractVk(embedUrl) {
+  try {
+    const res = await httpGet(embedUrl, {
+      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
+    });
+    if (!res) return null;
+    let html = await res.text();
 
-      // HLS
-      const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
-      if (hlsMatch) {
-        const hlsUrl = hlsMatch[1].replace(/\\\//g, "/");
-        const hlsRes = await httpGet(hlsUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-        if (hlsRes) {
-          const m3u8 = await hlsRes.text();
-          const qualityMatches = [...m3u8.matchAll(/RESOLUTION=\d+x(\d+)[\s\S]*?\n(https?:\/\/[^\s]+)/g)];
-          for (const qm of qualityMatches) {
-            results.push({
-              quality: qm[1] + "p",
-              url: qm[2],
-              type: "hls",
-              server: "VK"
-            });
-          }
-        }
-      }
+    // فك الباك سلاش
+    html = html.replace(/\\\//g, "/");
 
-      // MP4
-      const mp4Matches = [...html.matchAll(/"url(\d{2,4})":"(https:[^"]+)"/g)];
-      for (const m of mp4Matches) {
+    const results = [];
+
+    // روابط mp4 بجودات محددة
+    const qualities = ["144", "240", "360", "480", "720", "1080"];
+    for (const q of qualities) {
+      const re = new RegExp(`"url${q}"\\s*:\\s*"([^"]+)"`, "i");
+      const m = html.match(re);
+      if (m && m[1]) {
         results.push({
-          quality: m[1] + "p",
-          url: m[2].replace(/\\\//g, "/"),
+          quality: q + "p",
+          url: m[1],
           type: "mp4",
           server: "VK"
         });
       }
-
-      return results.length ? results : null;
-    } catch (err) {
-      console.log("extractVK error:", err);
-      return null;
     }
+
+    // روابط HLS
+    const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/i);
+    if (hlsMatch && hlsMatch[1]) {
+      results.push({
+        quality: "auto",
+        url: hlsMatch[1],
+        type: "hls",
+        server: "VK"
+      });
+    }
+
+    // fallback: أي لينك mp4/m3u8 جوه الصفحة
+    if (!results.length) {
+      const regex = /https?:\/\/[^\s"'<>]+?\.(?:m3u8|mp4)(?:\?[^"'<>]*)?/gi;
+      const matches = [...html.matchAll(regex)];
+      for (const m of matches) {
+        results.push({
+          quality: "VK",
+          url: m[0],
+          type: m[0].includes(".m3u8") ? "hls" : "mp4",
+          server: "VK"
+        });
+      }
+    }
+
+    return results.length ? results : null;
+  } catch (err) {
+    console.log("extractVk error:", err);
+    return null;
   }
+}
 
   // ==== Main ====
   try {
