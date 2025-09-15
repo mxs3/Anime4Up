@@ -328,56 +328,53 @@ async function extractVadbam(embedUrl) {
 }
 
   // ==== VK Extractor ====
-async function extractVK(url) {
-  try {
-    const res = await fetchv2(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "*/*",
-      }
-    });
-    const html = await res.text();
-
-    // تجميع كل اللينكات من JSON
-    const streams = {};
-    const regexMap = {
-      "hls": /"hls"\s*:\s*"([^"]+)"/,
-      "hls_fmp4": /"hls_fmp4"\s*:\s*"([^"]+)"/,
-      "1080p": /"url1080"\s*:\s*"([^"]+)"/,
-      "720p": /"url720"\s*:\s*"([^"]+)"/,
-      "480p": /"url480"\s*:\s*"([^"]+)"/,
-      "360p": /"url360"\s*:\s*"([^"]+)"/,
-      "240p": /"url240"\s*:\s*"([^"]+)"/,
-      "144p": /"url144"\s*:\s*"([^"]+)"/
+async function extractVK(embedUrl) {
+    const headers = {
+        "Referer": "https://vk.com/"
     };
 
-    for (const [quality, pattern] of Object.entries(regexMap)) {
-      const match = html.match(pattern);
-      if (match && match[1]) {
-        streams[quality] = match[1].replace(/\\\//g, "/");
-      }
-    }
+    try {
+        // fetch مع windows-1251 علشان VK ما يتلخبطش
+        const response = await fetchv2(embedUrl, {
+            method: "GET",
+            headers,
+            encoding: "windows-1251"
+        });
 
-    // الأولوية: HLS → HLS_fmp4 → 1080p → ... الخ
-    if (streams["hls"]) {
-      return { type: "hls", url: streams["hls"], qualities: streams };
-    } else if (streams["hls_fmp4"]) {
-      return { type: "hls", url: streams["hls_fmp4"], qualities: streams };
-    } else {
-      // fallback للـ MP4
-      const order = ["1080p", "720p", "480p", "360p", "240p", "144p"];
-      for (const q of order) {
-        if (streams[q]) {
-          return { type: "mp4", url: streams[q], quality: q, qualities: streams };
+        const html = await response.text();
+
+        // هنا هنخزن كل الجودات
+        const qualities = {};
+
+        // HLS (m3u8)
+        const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
+        if (hlsMatch && hlsMatch[1]) {
+            qualities["hls"] = hlsMatch[1].replace(/\\\//g, "/");
         }
-      }
-    }
 
-    throw new Error("No VK video streams found.");
-  } catch (err) {
-    console.error("VK extractor error:", err);
-    return null;
-  }
+        // MP4 Links (144p, 240p, 360p, 480p, 720p, 1080p)
+        const mp4Matches = html.match(/"url\d+"\s*:\s*"([^"]+)"/g);
+        if (mp4Matches) {
+            mp4Matches.forEach(m => {
+                const q = m.match(/"url(\d+)"/)[1];
+                const link = m.match(/:\s*"([^"]+)"/)[1].replace(/\\\//g, "/");
+                qualities[q + "p"] = link;
+            });
+        }
+
+        if (Object.keys(qualities).length === 0) {
+            throw new Error("No VK streams found");
+        }
+
+        return {
+            streams: qualities,
+            headers
+        };
+
+    } catch (error) {
+        console.log("extractVK error:", error.message);
+        return null;
+    }
 }
 
   // ==== Main ====
