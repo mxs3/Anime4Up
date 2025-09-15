@@ -227,34 +227,6 @@ async function extractStreamUrl(url) {
     return found ? normalizeUrl(found[0], embedUrl) : null;
   }
 
-  // ==== VOE Extractor ====
-  async function extractVoe(embedUrl) {
-    try {
-      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
-      if (!res) return null;
-      const html = await res.text();
-
-      let m = html.match(/"direct_access_url"\s*:\s*"([^"]+)"/i);
-      if (m && m[1]) return m[1].replace(/\\\//g, "/");
-
-      const sourcesMatch = html.match(/sources:\s*\[\{file:"([^"]+)",label:"([^"]+)"}/i);
-      if (sourcesMatch) {
-        return {
-          url: sourcesMatch[1],
-          quality: sourcesMatch[2] || "HD"
-        };
-      }
-
-      const any = html.match(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/i);
-      if (any) return any[0].replace(/\\\//g, "/");
-
-      return null;
-    } catch (e) {
-      console.log("extractVoe error:", e);
-      return null;
-    }
-  }
-
   // ==== DoodStream Extractor ====
   async function extractDoodstream(embedUrl) {
     try {
