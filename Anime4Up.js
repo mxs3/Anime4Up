@@ -337,13 +337,15 @@ async function vkExtractor(embedUrl) {
         const response = await soraFetch(embedUrl, {
             method: "GET",
             headers,
-            encoding: 'windows-1251'
+            encoding: 'windows-1251' // خليته زي ما قلت
         });
 
         const html = await response.text();
 
+        // 1) نفس regex الضيق اللي كنت بتستخدمه
         let hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
 
+        // 2) محاولات بديلة بأسماء شائعة لو اتغير الاسم
         if (!hlsMatch) {
             hlsMatch = html.match(/"url_hls"\s*:\s*"([^"]+)"/)
                     || html.match(/"hls_url"\s*:\s*"([^"]+)"/)
@@ -351,13 +353,16 @@ async function vkExtractor(embedUrl) {
                     || html.match(/hls\s*:\s*'([^']+)'/);
         }
 
+        // 3) لو لسة مفيش: نبحث عن أي m3u8 خام في الـ HTML
         if (!hlsMatch) {
             const anyMatch = html.match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/);
             if (anyMatch && anyMatch[0]) {
+                // نعيدها بنفس شكل الماتش الأصلي: [fullMatch, group1]
                 hlsMatch = [anyMatch[0], anyMatch[0]];
             }
         }
 
+        // 4) أخيراً نحاول نقرأ بلوك playerParams / player لو موجود وجواها نبحث تاني
         if (!hlsMatch) {
             const playerBlock = html.match(/playerParams\s*=\s*(\{[\s\S]*?\});/)
                               || html.match(/"player"\s*:\s*(\{[\s\S]*?\})/);
@@ -367,12 +372,14 @@ async function vkExtractor(embedUrl) {
                         || block.match(/hls\s*:\s*'([^']+)'/)
                         || block.match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/);
                 if (hlsMatch && !hlsMatch[1] && hlsMatch[0]) {
+                    // لو الماتش رجع بدون مجموعة ننسقها
                     hlsMatch = [hlsMatch[0], hlsMatch[0]];
                 }
             }
         }
 
         if (!hlsMatch || !hlsMatch[1]) {
+            // طباعة سطر دِباغ مفيدة لو تحب تبص عليها بعدين
             console.log("vkExtractor debug: couldn't find hls. first 2000 chars:", html.slice(0,2000));
             throw new Error("HLS stream not found in VK embed");
         }
