@@ -328,70 +328,51 @@ async function extractVadbam(embedUrl) {
 }
 
   // ==== VK Extractor ====
-async function vkExtractor(embedUrl) {
+async function extractVK(embedUrl) {
     const headers = {
         "Referer": "https://vk.com/"
     };
 
     try {
-        const response = await soraFetch(embedUrl, {
+        // fetch مع windows-1251 علشان VK ما يتلخبطش
+        const response = await fetchv2(embedUrl, {
             method: "GET",
             headers,
-            encoding: 'windows-1251' // خليته زي ما قلت
+            encoding: "windows-1251"
         });
 
         const html = await response.text();
 
-        // 1) نفس regex الضيق اللي كنت بتستخدمه
-        let hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
+        // هنا هنخزن كل الجودات
+        const qualities = {};
 
-        // 2) محاولات بديلة بأسماء شائعة لو اتغير الاسم
-        if (!hlsMatch) {
-            hlsMatch = html.match(/"url_hls"\s*:\s*"([^"]+)"/)
-                    || html.match(/"hls_url"\s*:\s*"([^"]+)"/)
-                    || html.match(/"manifest"\s*:\s*"([^"]+\.m3u8[^"]*)"/)
-                    || html.match(/hls\s*:\s*'([^']+)'/);
+        // HLS (m3u8)
+        const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
+        if (hlsMatch && hlsMatch[1]) {
+            qualities["hls"] = hlsMatch[1].replace(/\\\//g, "/");
         }
 
-        // 3) لو لسة مفيش: نبحث عن أي m3u8 خام في الـ HTML
-        if (!hlsMatch) {
-            const anyMatch = html.match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/);
-            if (anyMatch && anyMatch[0]) {
-                // نعيدها بنفس شكل الماتش الأصلي: [fullMatch, group1]
-                hlsMatch = [anyMatch[0], anyMatch[0]];
-            }
+        // MP4 Links (144p, 240p, 360p, 480p, 720p, 1080p)
+        const mp4Matches = html.match(/"url\d+"\s*:\s*"([^"]+)"/g);
+        if (mp4Matches) {
+            mp4Matches.forEach(m => {
+                const q = m.match(/"url(\d+)"/)[1];
+                const link = m.match(/:\s*"([^"]+)"/)[1].replace(/\\\//g, "/");
+                qualities[q + "p"] = link;
+            });
         }
 
-        // 4) أخيراً نحاول نقرأ بلوك playerParams / player لو موجود وجواها نبحث تاني
-        if (!hlsMatch) {
-            const playerBlock = html.match(/playerParams\s*=\s*(\{[\s\S]*?\});/)
-                              || html.match(/"player"\s*:\s*(\{[\s\S]*?\})/);
-            if (playerBlock && playerBlock[1]) {
-                const block = playerBlock[1];
-                hlsMatch = block.match(/"hls"\s*:\s*"([^"]+)"/)
-                        || block.match(/hls\s*:\s*'([^']+)'/)
-                        || block.match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/);
-                if (hlsMatch && !hlsMatch[1] && hlsMatch[0]) {
-                    // لو الماتش رجع بدون مجموعة ننسقها
-                    hlsMatch = [hlsMatch[0], hlsMatch[0]];
-                }
-            }
+        if (Object.keys(qualities).length === 0) {
+            throw new Error("No VK streams found");
         }
-
-        if (!hlsMatch || !hlsMatch[1]) {
-            // طباعة سطر دِباغ مفيدة لو تحب تبص عليها بعدين
-            console.log("vkExtractor debug: couldn't find hls. first 2000 chars:", html.slice(0,2000));
-            throw new Error("HLS stream not found in VK embed");
-        }
-
-        const videoSrc = hlsMatch[1].replace(/\\\//g, "/");
 
         return {
-            url: videoSrc,
-            headers: headers
+            streams: qualities,
+            headers
         };
+
     } catch (error) {
-        console.log("vkExtractor error: " + error.message);
+        console.log("extractVK error:", error.message);
         return null;
     }
 }
