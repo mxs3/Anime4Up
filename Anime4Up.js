@@ -342,7 +342,6 @@ async function vkExtractor(embedUrl) {
 
         const html = await response.text();
 
-        // 1) نحاول نلقط لينك hls الأساسي
         let hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
 
         if (!hlsMatch) {
@@ -378,36 +377,12 @@ async function vkExtractor(embedUrl) {
             throw new Error("HLS stream not found in VK embed");
         }
 
-        const manifestUrl = hlsMatch[1].replace(/\\\//g, "/");
+        const videoSrc = hlsMatch[1].replace(/\\\//g, "/");
 
-        // نطلب ملف m3u8 نفسه علشان نطلع كل الجودات
-        const m3u8Res = await soraFetch(manifestUrl, { headers });
-        const m3u8Text = await m3u8Res.text();
-
-        // Array لتجميع الجودات
-        const qualities = [];
-
-        // regex يلقط كل لينك من نوع .m3u8 مع resolution لو موجود
-        const regex = /#EXT-X-STREAM-INF:[^\n]*RESOLUTION=\d+x(\d+)[^\n]*\n(https?:\/\/[^\s]+)/g;
-        let match;
-        while ((match = regex.exec(m3u8Text)) !== null) {
-            qualities.push({
-                quality: match[1] + "p",
-                url: match[2],
-                headers
-            });
-        }
-
-        // fallback: لو مفيش أي جودة محددة، نحط اللينك الأصلي
-        if (qualities.length === 0) {
-            qualities.push({
-                quality: "auto",
-                url: manifestUrl,
-                headers
-            });
-        }
-
-        return qualities;
+        return {
+            url: videoSrc,
+            headers: headers
+        };
     } catch (error) {
         console.log("vkExtractor error: " + error.message);
         return null;
