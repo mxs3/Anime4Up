@@ -328,51 +328,88 @@ async function extractVadbam(embedUrl) {
 }
 
   // ==== VK Extractor ====
-async function extractVK(embedUrl) {
+async function vkExtractor(embedUrl) {
     const headers = {
         "Referer": "https://vk.com/"
     };
 
     try {
-        // fetch مع windows-1251 علشان VK ما يتلخبطش
-        const response = await fetchv2(embedUrl, {
+        const response = await soraFetch(embedUrl, {
             method: "GET",
             headers,
-            encoding: "windows-1251"
+            encoding: 'windows-1251'
         });
 
         const html = await response.text();
 
-        // هنا هنخزن كل الجودات
-        const qualities = {};
+        // 1) نحاول نلقط لينك hls الأساسي
+        let hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
 
-        // HLS (m3u8)
-        const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
-        if (hlsMatch && hlsMatch[1]) {
-            qualities["hls"] = hlsMatch[1].replace(/\\\//g, "/");
+        if (!hlsMatch) {
+            hlsMatch = html.match(/"url_hls"\s*:\s*"([^"]+)"/)
+                    || html.match(/"hls_url"\s*:\s*"([^"]+)"/)
+                    || html.match(/"manifest"\s*:\s*"([^"]+\.m3u8[^"]*)"/)
+                    || html.match(/hls\s*:\s*'([^']+)'/);
         }
 
-        // MP4 Links (144p, 240p, 360p, 480p, 720p, 1080p)
-        const mp4Matches = html.match(/"url\d+"\s*:\s*"([^"]+)"/g);
-        if (mp4Matches) {
-            mp4Matches.forEach(m => {
-                const q = m.match(/"url(\d+)"/)[1];
-                const link = m.match(/:\s*"([^"]+)"/)[1].replace(/\\\//g, "/");
-                qualities[q + "p"] = link;
+        if (!hlsMatch) {
+            const anyMatch = html.match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/);
+            if (anyMatch && anyMatch[0]) {
+                hlsMatch = [anyMatch[0], anyMatch[0]];
+            }
+        }
+
+        if (!hlsMatch) {
+            const playerBlock = html.match(/playerParams\s*=\s*(\{[\s\S]*?\});/)
+                              || html.match(/"player"\s*:\s*(\{[\s\S]*?\})/);
+            if (playerBlock && playerBlock[1]) {
+                const block = playerBlock[1];
+                hlsMatch = block.match(/"hls"\s*:\s*"([^"]+)"/)
+                        || block.match(/hls\s*:\s*'([^']+)'/)
+                        || block.match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/);
+                if (hlsMatch && !hlsMatch[1] && hlsMatch[0]) {
+                    hlsMatch = [hlsMatch[0], hlsMatch[0]];
+                }
+            }
+        }
+
+        if (!hlsMatch || !hlsMatch[1]) {
+            console.log("vkExtractor debug: couldn't find hls. first 2000 chars:", html.slice(0,2000));
+            throw new Error("HLS stream not found in VK embed");
+        }
+
+        const manifestUrl = hlsMatch[1].replace(/\\\//g, "/");
+
+        // نطلب ملف m3u8 نفسه علشان نطلع كل الجودات
+        const m3u8Res = await soraFetch(manifestUrl, { headers });
+        const m3u8Text = await m3u8Res.text();
+
+        // Array لتجميع الجودات
+        const qualities = [];
+
+        // regex يلقط كل لينك من نوع .m3u8 مع resolution لو موجود
+        const regex = /#EXT-X-STREAM-INF:[^\n]*RESOLUTION=\d+x(\d+)[^\n]*\n(https?:\/\/[^\s]+)/g;
+        let match;
+        while ((match = regex.exec(m3u8Text)) !== null) {
+            qualities.push({
+                quality: match[1] + "p",
+                url: match[2],
+                headers
             });
         }
 
-        if (Object.keys(qualities).length === 0) {
-            throw new Error("No VK streams found");
+        // fallback: لو مفيش أي جودة محددة، نحط اللينك الأصلي
+        if (qualities.length === 0) {
+            qualities.push({
+                quality: "auto",
+                url: manifestUrl,
+                headers
+            });
         }
 
-        return {
-            streams: qualities,
-            headers
-        };
-
+        return qualities;
     } catch (error) {
-        console.log("extractVK error:", error.message);
+        console.log("vkExtractor error: " + error.message);
         return null;
     }
 }
