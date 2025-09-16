@@ -334,7 +334,6 @@ async function extractVK(embedUrl) {
     };
 
     try {
-        // fetch مع windows-1251 علشان VK ما يتلخبطش
         const response = await fetchv2(embedUrl, {
             method: "GET",
             headers,
@@ -343,16 +342,15 @@ async function extractVK(embedUrl) {
 
         const html = await response.text();
 
-        // هنا هنخزن كل الجودات
         const qualities = {};
 
-        // HLS (m3u8)
+        // HLS
         const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
         if (hlsMatch && hlsMatch[1]) {
             qualities["hls"] = hlsMatch[1].replace(/\\\//g, "/");
         }
 
-        // MP4 Links (144p, 240p, 360p, 480p, 720p, 1080p)
+        // MP4 qualities
         const mp4Matches = html.match(/"url\d+"\s*:\s*"([^"]+)"/g);
         if (mp4Matches) {
             mp4Matches.forEach(m => {
