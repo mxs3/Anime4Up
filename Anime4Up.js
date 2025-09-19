@@ -317,6 +317,7 @@ async function extractStreamUrl(url) {
   }
 
   // ==== VK Extractor (Fixed) ====
+// ==== VK Extractor (HLS Only) ====
 async function extractVK(embedUrl) {
   const headers = {
     "Referer": "https://vk.com/",
@@ -334,7 +335,7 @@ async function extractVK(embedUrl) {
     const html = await response.text();
     const results = [];
 
-    // HLS
+    // HLS only
     const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
     if (hlsMatch && hlsMatch[1]) {
       results.push({
@@ -345,25 +346,39 @@ async function extractVK(embedUrl) {
       });
     }
 
-    // MP4 qualities
-    const mp4Matches = html.match(/"url\d+"\s*:\s*"([^"]+)"/g);
-    if (mp4Matches) {
-      mp4Matches.forEach(m => {
-        const q = m.match(/"url(\d+)"/)[1];
-        const link = m.match(/:\s*"([^"]+)"/)[1].replace(/\\\//g, "/");
-        results.push({
-          quality: q + "p",
-          url: link,
-          type: "mp4",
-          server: "VK"
-        });
-      });
-    }
-
     return results.length ? results : null;
 
   } catch (error) {
     console.log("extractVK error:", error.message);
+    return null;
+  }
+}
+
+// ==== HLS Extractor (Any Page) ====
+async function extractHLS(embedUrl) {
+  try {
+    const res = await httpGet(embedUrl, {
+      headers: { "User-Agent": "Mozilla/5.0", "Referer": embedUrl }
+    });
+    if (!res) return null;
+
+    const html = await res.text();
+    const results = [];
+
+    // دور على أي m3u8
+    const hlsMatches = [...html.matchAll(/https?:\/\/[^\s"']+\.m3u8[^\s"'<>]*/gi)];
+    for (const m of hlsMatches) {
+      results.push({
+        quality: "auto",
+        url: m[0],
+        type: "hls",
+        server: "HLS"
+      });
+    }
+
+    return results.length ? results : null;
+  } catch (err) {
+    console.log("extractHLS error:", err);
     return null;
   }
 }
