@@ -316,34 +316,57 @@ async function extractStreamUrl(url) {
     }
   }
 
-  // ==== VK Extractor (دمج محسّن) ====
-  async function extractVK(embedUrl) {
-    const headers = { "Referer": "https://vk.com/" };
-    try {
-      const res = await httpGet(embedUrl, { headers, method: "GET" });
-      if (!res) return null;
-      const html = await res.text();
+  // ==== VK Extractor (Fixed) ====
+async function extractVK(embedUrl) {
+  const headers = {
+    "Referer": "https://vk.com/",
+    "User-Agent": "Mozilla/5.0"
+  };
 
-      const qualities = {};
+  try {
+    const response = await httpGet(embedUrl, {
+      headers,
+      method: "GET",
+      encoding: "windows-1251"
+    });
+    if (!response) return null;
 
-      const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
-      if (hlsMatch && hlsMatch[1]) qualities["hls"] = unescapeVK(hlsMatch[1]);
+    const html = await response.text();
+    const results = [];
 
-      const mp4Matches = [...html.matchAll(/"url(\d+)"\s*:\s*"([^"]+)"/g)];
-      for (const m of mp4Matches) {
-        const q = m[1] + "p";
-        const link = unescapeVK(m[2]);
-        qualities[q] = link;
-      }
-
-      if (!Object.keys(qualities).length) return null;
-
-      return { streams: qualities, headers };
-    } catch (err) {
-      console.log("extractVK error:", err.message);
-      return null;
+    // HLS
+    const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
+    if (hlsMatch && hlsMatch[1]) {
+      results.push({
+        quality: "auto",
+        url: hlsMatch[1].replace(/\\\//g, "/"),
+        type: "hls",
+        server: "VK"
+      });
     }
+
+    // MP4 qualities
+    const mp4Matches = html.match(/"url\d+"\s*:\s*"([^"]+)"/g);
+    if (mp4Matches) {
+      mp4Matches.forEach(m => {
+        const q = m.match(/"url(\d+)"/)[1];
+        const link = m.match(/:\s*"([^"]+)"/)[1].replace(/\\\//g, "/");
+        results.push({
+          quality: q + "p",
+          url: link,
+          type: "mp4",
+          server: "VK"
+        });
+      });
+    }
+
+    return results.length ? results : null;
+
+  } catch (error) {
+    console.log("extractVK error:", error.message);
+    return null;
   }
+}
 
   // ==== Main ====
   try {
