@@ -187,6 +187,12 @@ async function extractStreamUrl(url) {
     }
   }
 
+  function unescapeVK(s) {
+    return s
+      ? s.replace(/\\\//g, "/").replace(/\\u0026/g, "&").replace(/&amp;/g, "&")
+      : s;
+  }
+
   // ==== mp4upload Extractor ====
   async function extractMp4upload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
@@ -243,10 +249,10 @@ async function extractStreamUrl(url) {
 
       const md5Match = html.match(/\/pass_md5\/[a-z0-9\/\-_\.]+/i);
       if (!md5Match) {
-        const directMatches = [...html.matchAll(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*\s*(?:data-quality=["']([^"']+)["'])?/gi)];
+        const directMatches = [...html.matchAll(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/gi)];
         if (!directMatches.length) return null;
         return directMatches.map(m => ({
-          quality: m[1] || "HD",
+          quality: "HD",
           url: normalizeUrl(m[0], embedUrl),
           type: "mp4",
           server: "DoodStream"
@@ -276,104 +282,68 @@ async function extractStreamUrl(url) {
       return null;
     }
   }
-  
-// ==== Vadbam Extractor (MP4 Only, Force Mode) ====
-async function extractVadbam(embedUrl) {
-  try {
-    const res = await httpGet(embedUrl, {
-      headers: { 
-        Referer: embedUrl, 
-        "User-Agent": "Mozilla/5.0" 
-      },
-      redirect: "follow"
-    });
-    if (!res) return null;
-    let html = await res.text();
 
-    // شيل أي backslashes أو ترميزات
-    html = html.replace(/\\+/g, "");
-
-    const results = [];
-
-    // هات أي لينك mp4 مباشر
-    const mp4Matches = [...html.matchAll(/https?:\/\/[^\s"'<>]+?\.mp4(?:\?[^"'<>]*)?/gi)];
-    for (const m of mp4Matches) {
-      let quality = "Vadbam";
-      const qMatch = m[0].match(/(\d{3,4}p)/i);
-      if (qMatch) quality = qMatch[1];
-      results.push({
-        quality,
-        url: normalizeUrl(m[0], embedUrl),
-        type: "mp4",
-        server: "Vadbam"
-      });
-    }
-
-    // fallback لو فيه "file":"..."
-    const fileJsonMatches = [...html.matchAll(/"file"\s*:\s*"([^"]+\.mp4[^"]*)"/gi)];
-    for (const fm of fileJsonMatches) {
-      results.push({
-        quality: "auto",
-        url: normalizeUrl(fm[1], embedUrl),
-        type: "mp4",
-        server: "Vadbam"
-      });
-    }
-
-    return results.length ? results : null;
-  } catch (err) {
-    console.log("extractVadbam error:", err);
-    return null;
-  }
-}
-
-  // ==== VK Extractor ====
-async function extractVK(embedUrl) {
-    const headers = {
-        "Referer": "https://vk.com/"
-    };
-
+  // ==== Vadbam Extractor ====
+  async function extractVadbam(embedUrl) {
     try {
-        const response = await fetchv2(embedUrl, {
-            method: "GET",
-            headers,
-            encoding: "windows-1251"
-        });
+      const res = await httpGet(embedUrl, {
+        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" },
+        redirect: "follow"
+      });
+      if (!res) return null;
+      let html = await res.text();
+      html = html.replace(/\\+/g, "");
 
-        const html = await response.text();
+      const results = [];
 
-        const qualities = {};
+      const mp4Matches = [...html.matchAll(/https?:\/\/[^\s"'<>]+?\.mp4(?:\?[^"'<>]*)?/gi)];
+      for (const m of mp4Matches) {
+        let quality = "Vadbam";
+        const qMatch = m[0].match(/(\d{3,4}p)/i);
+        if (qMatch) quality = qMatch[1];
+        results.push({ quality, url: normalizeUrl(m[0], embedUrl), type: "mp4", server: "Vadbam" });
+      }
 
-        // HLS
-        const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
-        if (hlsMatch && hlsMatch[1]) {
-            qualities["hls"] = hlsMatch[1].replace(/\\\//g, "/");
-        }
+      const fileJsonMatches = [...html.matchAll(/"file"\s*:\s*"([^"]+\.mp4[^"]*)"/gi)];
+      for (const fm of fileJsonMatches) {
+        results.push({ quality: "auto", url: normalizeUrl(fm[1], embedUrl), type: "mp4", server: "Vadbam" });
+      }
 
-        // MP4 qualities
-        const mp4Matches = html.match(/"url\d+"\s*:\s*"([^"]+)"/g);
-        if (mp4Matches) {
-            mp4Matches.forEach(m => {
-                const q = m.match(/"url(\d+)"/)[1];
-                const link = m.match(/:\s*"([^"]+)"/)[1].replace(/\\\//g, "/");
-                qualities[q + "p"] = link;
-            });
-        }
-
-        if (Object.keys(qualities).length === 0) {
-            throw new Error("No VK streams found");
-        }
-
-        return {
-            streams: qualities,
-            headers
-        };
-
-    } catch (error) {
-        console.log("extractVK error:", error.message);
-        return null;
+      return results.length ? results : null;
+    } catch (err) {
+      console.log("extractVadbam error:", err);
+      return null;
     }
-}
+  }
+
+  // ==== VK Extractor (دمج محسّن) ====
+  async function extractVK(embedUrl) {
+    const headers = { "Referer": "https://vk.com/" };
+    try {
+      const res = await httpGet(embedUrl, { headers, method: "GET" });
+      if (!res) return null;
+      const html = await res.text();
+
+      const qualities = {};
+
+      const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
+      if (hlsMatch && hlsMatch[1]) qualities["hls"] = unescapeVK(hlsMatch[1]);
+
+      const mp4Matches = [...html.matchAll(/"url(\d+)"\s*:\s*"([^"]+)"/g)];
+      for (const m of mp4Matches) {
+        const q = m[1] + "p";
+        const link = unescapeVK(m[2]);
+        qualities[q] = link;
+      }
+
+      if (!Object.keys(qualities).length) return null;
+
+      return { streams: qualities, headers };
+    } catch (err) {
+      console.log("extractVK error:", err.message);
+      return null;
+    }
+  }
 
   // ==== Main ====
   try {
@@ -408,7 +378,7 @@ async function extractVK(embedUrl) {
 
       if (/mp4upload/.test(u)) direct = await extractMp4upload(prov.rawUrl);
       else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
-      else if (/(dood|vide0\.net|doodstream|dood\.watch|dood\.so|DoodStream)/.test(u)) direct = await extractDoodstream(prov.rawUrl);
+      else if (/(dood|vide0\.net|doodstream|dood\.watch|dood\.so)/.test(u)) direct = await extractDoodstream(prov.rawUrl);
       else if (/sendvid/.test(u)) direct = await extractSendvid(prov.rawUrl);
       else if (/(vadbam|vdbtm)/i.test(u)) direct = await extractVadbam(prov.rawUrl);
       else if (/vkvideo\.ru/.test(u) || /vk\.com\/video/.test(u) || /vk\.com\/video_ext\.php/.test(u)) direct = await extractVK(prov.rawUrl);
@@ -420,11 +390,20 @@ async function extractVK(embedUrl) {
           title: `${prov.title} [${d.quality || "auto"}]`,
           streamUrl: d.url,
           type: d.type || "mp4",
-          headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" }
+          headers: d.headers || { Referer: prov.rawUrl }
         }));
       }
 
-      return { title: prov.title, streamUrl: direct.url || direct, headers: { Referer: prov.rawUrl, "User-Agent": "Mozilla/5.0" } };
+      if (direct.streams) {
+        return Object.entries(direct.streams).map(([q, link]) => ({
+          title: `${prov.title} [${q}]`,
+          streamUrl: link,
+          type: /\.m3u8/.test(link) ? "hls" : "mp4",
+          headers: direct.headers || { Referer: prov.rawUrl }
+        }));
+      }
+
+      return { title: prov.title, streamUrl: direct.url || direct, headers: { Referer: prov.rawUrl } };
     }));
 
     return JSON.stringify({ streams: results.flat().filter(Boolean) });
