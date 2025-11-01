@@ -14,21 +14,25 @@ async function searchResults(keyword) {
     const blocks = html.split('<a');
     for (const block of blocks) {
       const hrefMatch = block.match(/href="([^"]*\/anime\/[^"]*)"/);
-      // تحديث استخراج الصورة لدعم src, data-src, و background-image
+
+      // تحسين شامل لاستخراج الصورة من أي صيغة ممكنة
       const imgMatch =
-        block.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/) ||
-        block.match(/style=["'][^"']*url\(['"]?([^'")]+)['"]?\)/i);
+        block.match(/<img[^>]+(?:src|data-src|data-lazy|data-bg)=["']([^"']+)["'][^>]*>/i) ||
+        block.match(/style=["'][^"']*background(?:-image)?\s*:\s*url\(['"]?([^'")]+)['"]?\)/i) ||
+        block.match(/poster=["']([^"']+)["']/i);
+
+      const image = imgMatch ? imgMatch[1].trim().replace(/^\/\//, 'https://') : '';
 
       const titleMatch =
-        block.match(/<h3[^>]*>\s*([^<]+)\s*<\/h3>/) ||
-        block.match(/alt=["']([^"']+)["']/) ||
-        block.match(/title=["']([^"']+)["']/);
+        block.match(/<h3[^>]*>\s*([^<]+)\s*<\/h3>/i) ||
+        block.match(/alt=["']([^"']+)["']/i) ||
+        block.match(/title=["']([^"']+)["']/i);
 
       if (hrefMatch && titleMatch) {
         results.push({
           title: decodeHTMLEntities(titleMatch[1].trim()),
           href: hrefMatch[1].trim(),
-          image: imgMatch ? imgMatch[1].trim() : ''
+          image: image
         });
       }
     }
