@@ -182,6 +182,7 @@ async function extractStreamUrl(url) {
   function safeTrim(s) {
     return s ? String(s).trim() : "";
   }
+
   function normalizeUrl(raw, base = "") {
     if (!raw) return raw;
     raw = safeTrim(raw);
@@ -194,52 +195,46 @@ async function extractStreamUrl(url) {
     }
   }
 
-  // ==== mp4upload Extractor ====
+  function unescapeVK(s) {
+    return s
+      ? s.replace(/\\\//g, "/").replace(/\\u0026/g, "&").replace(/&amp;/g, "&")
+      : s;
+  }
+
+  // ==== Mp4upload Extractor ====
   async function extractMp4upload(embedUrl) {
     embedUrl = normalizeUrl(embedUrl);
-    const res = await httpGet(embedUrl, {
-      headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-    });
+    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
     if (!res) return null;
     const html = await res.text();
-    const match = html.match(/src:\s*"([^"]+)"/);
-    return match ? normalizeUrl(match[1], embedUrl) : null;
+    const regex = /src:\s*"([^"]+)"/;
+    const match = html.match(regex);
+    if (match) return normalizeUrl(match[1], embedUrl);
+    return null;
   }
 
-  // ==== uqload Extractor (Fixed) ====
+  // ==== Uqload Extractor (محسّن) ====
   async function extractUqload(embedUrl) {
-    try {
-      const res = await httpGet(embedUrl, {
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" }
-      });
-      if (!res) return null;
-      const html = await res.text();
-
-      // محاولة استخراج اللينك من sources
-      const match = html.match(/sources:\s*\[\s*["']([^"']+\.mp4[^"']*)["']/i);
-      if (match) return normalizeUrl(match[1], embedUrl);
-
-      // استخراج من <source src="">
-      const tagMatch = html.match(/<source\s+src=["']([^"']+\.mp4[^"']*)["']/i);
-      if (tagMatch) return normalizeUrl(tagMatch[1], embedUrl);
-
-      // أي لينك mp4 عشوائي
-      const found = html.match(/https?:\/\/[^"']+\.mp4[^"']*/i);
-      return found ? normalizeUrl(found[0], embedUrl) : null;
-    } catch {
-      return null;
-    }
+    const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+    if (!res) return null;
+    const html = await res.text();
+    const sources = html.match(/sources\s*:\s*\[\s*{[^}]*file\s*:\s*["']([^"']+)["']/i);
+    if (sources) return normalizeUrl(sources[1], embedUrl);
+    const found = html.match(/https?:\/\/[^\s"']+\.mp4[^"']*/i);
+    return found ? normalizeUrl(found[0], embedUrl) : null;
   }
 
-  // ==== DoodStream Extractor ====
+  // ==== Doodstream Extractor ====
   async function extractDoodstream(embedUrl) {
     try {
       function randomStr(len) {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+        let result = "";
+        for (let i = 0; i < len; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+        return result;
       }
 
-      const pageRes = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+      const pageRes = await httpGet(embedUrl, { headers: { "Referer": embedUrl, "User-Agent": "Mozilla/5.0" } });
       if (!pageRes) return null;
       const html = await pageRes.text();
 
@@ -248,17 +243,20 @@ async function extractStreamUrl(url) {
         const directMatches = [...html.matchAll(/https?:\/\/[^\s"'<>]+(?:m3u8|mp4)[^"'<>]*/gi)];
         if (!directMatches.length) return null;
         return directMatches.map(m => ({
-          quality: "(HD)",
+          quality: "HD",
           url: normalizeUrl(m[0], embedUrl),
           type: "mp4",
-          server: "DoodStream"
+          server: "Doodstream"
         }));
       }
 
       const md5Path = md5Match[0];
-      const domain = new URL(embedUrl).origin;
-      const passUrl = `${domain}${md5Path}`;
-      const passRes = await httpGet(passUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+      const domainMatch = embedUrl.match(/https?:\/\/([^/]+)/i);
+      if (!domainMatch) return null;
+      const domain = domainMatch[1];
+
+      const passUrl = `https://${domain}${md5Path}`;
+      const passRes = await httpGet(passUrl, { headers: { "Referer": embedUrl, "User-Agent": "Mozilla/5.0" } });
       if (!passRes) return null;
       const tokenPart = (await passRes.text()).trim();
       if (!tokenPart) return null;
@@ -268,84 +266,106 @@ async function extractStreamUrl(url) {
       const random = randomStr(10);
       const baseUrl = `${tokenPart}${random}?token=${token}&expiry=${expiry}`;
 
-      return [{ quality: "(HD)", url: baseUrl, type: "mp4", server: "DoodStream" }];
-    } catch {
+      return [{ quality: "HD", url: baseUrl, type: "mp4", server: "Doodstream" }];
+    } catch (err) {
+      console.log("extractDoodstream error:", err);
+      return null;
+    }
+  }
+
+  // ==== Vidmoly Extractor ====
+  async function extractVidmoly(embedUrl) {
+    try {
+      const res = await httpGet(embedUrl, { headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0" } });
+      if (!res) return null;
+      const html = await res.text();
+
+      const m3u8Match = html.match(/file:\s*["']([^"']+\.m3u8[^"']*)["']/i);
+      if (m3u8Match) {
+        return [{ quality: "auto", url: m3u8Match[1], type: "hls", server: "Vidmoly" }];
+      }
+
+      const mp4Match = html.match(/file:\s*["']([^"']+\.mp4[^"']*)["']/i);
+      if (mp4Match) {
+        return [{ quality: "HD", url: mp4Match[1], type: "mp4", server: "Vidmoly" }];
+      }
+
+      const found = html.match(/https?:\/\/[^\s"'<>]+(?:mp4|m3u8)[^"'<>]*/i);
+      return found ? [{ quality: "auto", url: found[0], type: "auto", server: "Vidmoly" }] : null;
+    } catch (err) {
+      console.log("extractVidmoly error:", err);
       return null;
     }
   }
 
   // ==== VK Extractor ====
   async function extractVK(embedUrl) {
+    const headers = { Referer: "https://vk.com/", "User-Agent": "Mozilla/5.0" };
     try {
-      const response = await httpGet(embedUrl, {
-        headers: { Referer: "https://vk.com/", "User-Agent": "Mozilla/5.0" },
-        method: "GET"
-      });
+      const response = await httpGet(embedUrl, { headers });
       if (!response) return null;
       const html = await response.text();
-
+      const results = [];
       const hlsMatch = html.match(/"hls"\s*:\s*"([^"]+)"/);
       if (hlsMatch && hlsMatch[1]) {
-        return [{ quality: "(HD)", url: hlsMatch[1].replace(/\\\//g, "/"), type: "hls", server: "VK" }];
+        results.push({
+          quality: "auto",
+          url: hlsMatch[1].replace(/\\\//g, "/"),
+          type: "hls",
+          server: "VK"
+        });
       }
-      return null;
-    } catch {
+      return results.length ? results : null;
+    } catch (error) {
+      console.log("extractVK error:", error.message);
       return null;
     }
   }
 
-  // ==== Main ====
+  // ==== MAIN ====
   try {
     const pageRes = await httpGet(url, { headers: { Referer: url, "User-Agent": "Mozilla/5.0" } });
     if (!pageRes) return JSON.stringify({ streams: [] });
     const pageHtml = await pageRes.text();
 
+    const iframeMatches = [...pageHtml.matchAll(/data-watch\s*=\s*["']([^"']+)["']/gi)];
     const providers = [];
     const seen = new Set();
-    const serverRegex = /data-watch=["']([^"']+)["'][^>]*>\s*([^<\[]+)/gi;
-    let match;
-    while ((match = serverRegex.exec(pageHtml)) !== null) {
-      const rawUrl = normalizeUrl(match[1], url);
-      const title = match[2].trim();
-      if (!seen.has(rawUrl)) {
-        seen.add(rawUrl);
-        providers.push({ rawUrl, title });
-      }
+
+    for (const im of iframeMatches) {
+      const rawUrl = normalizeUrl(im[1], url);
+      if (!rawUrl || seen.has(rawUrl)) continue;
+      seen.add(rawUrl);
+      providers.push({ rawUrl });
     }
 
-    const results = await Promise.all(
-      providers.map(async prov => {
-        const u = prov.rawUrl.toLowerCase();
-        let direct = null;
+    const results = await Promise.all(providers.map(async prov => {
+      const u = prov.rawUrl.toLowerCase();
+      let direct = null, serverName = "";
 
-        if (/mp4upload/.test(u)) direct = await extractMp4upload(prov.rawUrl);
-        else if (/uqload/.test(u)) direct = await extractUqload(prov.rawUrl);
-        else if (/(dood|dsvplay)/.test(u)) direct = await extractDoodstream(prov.rawUrl);
-        else if (/vkvideo|vk\.com/.test(u)) direct = await extractVK(prov.rawUrl);
-        else if (/vidmoly/.test(u)) direct = prov.rawUrl; // Vidmoly direct link
+      if (/mp4upload/.test(u)) { direct = await extractMp4upload(prov.rawUrl); serverName = "Mp4upload"; }
+      else if (/uqload/.test(u)) { direct = await extractUqload(prov.rawUrl); serverName = "Uqload"; }
+      else if (/dood/.test(u)) { direct = await extractDoodstream(prov.rawUrl); serverName = "Doodstream"; }
+      else if (/vidmoly/.test(u)) { direct = await extractVidmoly(prov.rawUrl); serverName = "Vidmoly"; }
+      else if (/vkvideo\.ru|vk\.com/.test(u)) { direct = await extractVK(prov.rawUrl); serverName = "VK"; }
 
-        if (!direct) return null;
+      if (!direct) return null;
 
-        if (Array.isArray(direct)) {
-          return direct.map(d => ({
-            title: `${prov.title} ${d.quality || ""}`,
-            streamUrl: d.url,
-            type: d.type || "mp4",
-            headers: { Referer: prov.rawUrl }
-          }));
-        }
-
-        return {
-          title: `${prov.title} (HD)`,
-          streamUrl: typeof direct === "string" ? direct : direct.url,
-          type: /\.m3u8/.test(direct) ? "hls" : "mp4",
+      if (Array.isArray(direct)) {
+        return direct.map(d => ({
+          title: `${serverName} [${d.quality || "HD"}]`,
+          streamUrl: d.url,
+          type: d.type || "mp4",
           headers: { Referer: prov.rawUrl }
-        };
-      })
-    );
+        }));
+      }
+
+      return { title: `${serverName} [HD]`, streamUrl: direct, headers: { Referer: prov.rawUrl } };
+    }));
 
     return JSON.stringify({ streams: results.flat().filter(Boolean) });
   } catch (e) {
+    console.log("extractStreamUrl error:", e);
     return JSON.stringify({ streams: [] });
   }
 }
