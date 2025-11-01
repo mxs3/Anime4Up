@@ -122,27 +122,25 @@ async function extractEpisodes(url) {
     // Map لتجنب التكرار
     const episodesMap = new Map();
 
-    // هنصطاد بس الروابط اللي فيها كلمة episode
-    const linkRegex = /<a[^>]+href="([^"]+episode[^"]+)"[^>]*>(.*?)<\/a>/gi;
-    const numRegex = /(?:Episode|الحلقة|Ep)\s*(\d+)/i;
+    // استخراج الحلقات من البنية الجديدة
+    const episodeRegex = /<a[^>]+href="([^"]+\/episode\/[^"]+)"[^>]*data-src="([^"]+)"[^>]*title="([^"]+)"[\s\S]*?<span>\s*الحلقة\s*(\d+)\s*<\/span>/gi;
 
     for (const html of pages) {
       let m;
-      while ((m = linkRegex.exec(html))) {
+      while ((m = episodeRegex.exec(html))) {
         const href = m[1].trim();
-        const text = m[2].trim();
-        const numMatch = text.match(numRegex);
+        const image = m[2].trim();
+        const title = m[3].trim();
+        const number = parseInt(m[4]);
 
-        if (!href) continue;
+        if (!href || episodesMap.has(href)) continue;
 
-        let number = numMatch ? parseInt(numMatch[1]) : null;
-
-        if (!episodesMap.has(href)) {
-          episodesMap.set(href, {
-            href,
-            number
-          });
-        }
+        episodesMap.set(href, {
+          href,
+          image,
+          title,
+          number
+        });
       }
     }
 
