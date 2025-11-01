@@ -11,11 +11,14 @@ async function searchResults(keyword) {
 
     const results = [];
 
-    // البنية الجديدة فيها روابط مباشرة على /anime/
     const blocks = html.split('<a');
     for (const block of blocks) {
       const hrefMatch = block.match(/href="([^"]*\/anime\/[^"]*)"/);
-      const imgMatch = block.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/);
+      // تحديث استخراج الصورة لدعم src, data-src, و background-image
+      const imgMatch =
+        block.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/) ||
+        block.match(/style=["'][^"']*url\(['"]?([^'")]+)['"]?\)/i);
+
       const titleMatch =
         block.match(/<h3[^>]*>\s*([^<]+)\s*<\/h3>/) ||
         block.match(/alt=["']([^"']+)["']/) ||
