@@ -1,38 +1,35 @@
 async function searchResults(keyword) {
   try {
-    const url = `https://4n.o1p2i3.shop/?s=${encodeURIComponent(keyword)}`;
+    const url = `https://ww.anime4up.rest/?s=${encodeURIComponent(keyword)}`;
     const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://4n.o1p2i3.shop/'
+        'Referer': 'https://ww.anime4up.rest/'
       }
     });
     const html = await res.text();
 
     const results = [];
+    const blocks = html.split('anime-card-container');
 
-    const blocks = html.split('<a');
     for (const block of blocks) {
-      const hrefMatch = block.match(/href="([^"]*\/anime\/[^"]*)"/);
+      // الرابط الرئيسي
+      const hrefMatch = block.match(/<a[^>]+href="([^"]*\/anime\/[^"]+)"/i);
 
-      // تحسين شامل لاستخراج الصورة من أي صيغة ممكنة
-      const imgMatch =
-        block.match(/<img[^>]+(?:src|data-src|data-lazy|data-bg)=["']([^"']+)["'][^>]*>/i) ||
-        block.match(/style=["'][^"']*background(?:-image)?\s*:\s*url\(['"]?([^'")]+)['"]?\)/i) ||
-        block.match(/poster=["']([^"']+)["']/i);
+      // الصورة الجديدة (data-image بدل src)
+      const imgMatch = block.match(/data-image=["']([^"']+)["']/i);
 
-      const image = imgMatch ? imgMatch[1].trim().replace(/^\/\//, 'https://') : '';
-
+      // العنوان
       const titleMatch =
-        block.match(/<h3[^>]*>\s*([^<]+)\s*<\/h3>/i) ||
-        block.match(/alt=["']([^"']+)["']/i) ||
-        block.match(/title=["']([^"']+)["']/i);
+        block.match(/<h3>\s*<a[^>]*>([^<]+)<\/a>/i) ||
+        block.match(/title=["']([^"']+)["']/i) ||
+        block.match(/alt=["']([^"']+)["']/i);
 
       if (hrefMatch && titleMatch) {
         results.push({
           title: decodeHTMLEntities(titleMatch[1].trim()),
           href: hrefMatch[1].trim(),
-          image: image
+          image: imgMatch ? imgMatch[1].trim() : ''
         });
       }
     }
