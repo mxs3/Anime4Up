@@ -1,26 +1,31 @@
 async function searchResults(keyword) {
   try {
-    const url = `https://ww.anime4up.rest/?search_param=animes&s=${encodeURIComponent(keyword)}`;
+    const url = `https://4n.o1p2i3.shop/?s=${encodeURIComponent(keyword)}`;
     const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://ww.anime4up.rest/'
+        'Referer': 'https://4n.o1p2i3.shop/'
       }
     });
     const html = await res.text();
 
     const results = [];
-    const blocks = html.split('anime-card-container');
-    for (const block of blocks) {
-      const hrefMatch = block.match(/<a href="([^"]+\/anime\/[^"]+)"/);
-      const imgMatch = block.match(/<img[^>]+src="([^"]+)"[^>]*>/);
-      const titleMatch = block.match(/anime-card-title[^>]*>\s*<h3>\s*<a[^>]*>([^<]+)<\/a>/);
 
-      if (hrefMatch && imgMatch && titleMatch) {
+    // البنية الجديدة فيها روابط مباشرة على /anime/
+    const blocks = html.split('<a');
+    for (const block of blocks) {
+      const hrefMatch = block.match(/href="([^"]*\/anime\/[^"]*)"/);
+      const imgMatch = block.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/);
+      const titleMatch =
+        block.match(/<h3[^>]*>\s*([^<]+)\s*<\/h3>/) ||
+        block.match(/alt=["']([^"']+)["']/) ||
+        block.match(/title=["']([^"']+)["']/);
+
+      if (hrefMatch && titleMatch) {
         results.push({
-          title: decodeHTMLEntities(titleMatch[1]),
-          href: hrefMatch[1],
-          image: imgMatch[1]
+          title: decodeHTMLEntities(titleMatch[1].trim()),
+          href: hrefMatch[1].trim(),
+          image: imgMatch ? imgMatch[1].trim() : ''
         });
       }
     }
